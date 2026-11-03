@@ -47,22 +47,28 @@ class Config:
 
     anas_pdf_url: str = "https://www.stradeanas.it/it/anas_ordinanzeweb/getordinanzapdf?ord_id={id}"
     anas_start_id: int | None = None
-    anas_user_agent: str = "WazeItaliaAnasBot/1.0"
+    anas_user_agent: str = "WazeItaliaAnasBot"  # ci presentiamo per quello che siamo (ANAS_USER_AGENT per cambiarlo)
     anas_route: str = "auto"  # auto | direct | worker (vedi anas/relay.py)
     worker_url: str = ""      # di solito non serve: il Worker lo salva da solo nel database
-    request_delay_seconds: float = 3.0  # pausa tra due richieste ad ANAS (il loro firewall blocca chi esagera)
-    max_requests_per_cycle: int = 150
+    # Il firewall di ANAS mette in quarantena chi fa ~9 richieste in meno di un minuto (collaudo del
+    # 03/11/2026): ogni giro fa poche richieste, distanziate, e si ferma al primo blocco per un'ora.
+    request_delay_seconds: float = 15.0  # pausa tra due richieste ad ANAS
+    max_pdf_per_run: int = 3  # PDF scaricati al massimo per giro (gli altri slittano al giro dopo)
+    block_pause_minutes: int = 60  # dopo una pagina di blocco del firewall: niente richieste per un'ora
+    max_requests_per_cycle: int = 6  # canale a numeri (di riserva): PDF provati per giro, pochi per il firewall
     max_gap: int = 25
     missing_retry_hours: int = 168  # i numeri saltati si ricontrollano per 7 giorni
     missing_recheck_per_cycle: int = 20
     lookahead_after_hours: int = 6  # senza novità da 6 ore: assaggi più avanti nella numerazione
     stall_alert_hours: int = 72  # senza novità da 3 giorni: avviso nel canale admin
     job_time_budget_minutes: int = 12
-    listing_full_per_run: int = 1  # strutture rilette per intero a ogni turno (rete di sicurezza)
-    listing_full_every_runs: int = 4  # finita l'installazione, un turno di lettura completa ogni 4 giri (1 ora)
-    listing_fast_pages_min: int = 1  # lettura veloce: pagine minime per struttura a ogni giro
+    # Lettura veloce: la ricerca "tutta Italia" (ordinata dalla più recente), 1-2 pagine da 5 per giro.
+    listing_fast_pages_min: int = 1  # pagine lette sempre
+    listing_fast_pages_max: int = 2  # ...e massime, se continuano a comparire ordinanze nuove
+    # Lettura completa a rotazione (una struttura per intero): spenta, costa decine di richieste.
+    listing_full_per_run: int = 0  # strutture rilette per intero a ogni turno (0 = mai)
+    listing_full_every_runs: int = 4  # un turno di lettura completa ogni N giri
     anas_bot_key: str = ""  # codice concordato con ANAS, mandato nell'intestazione X-Waze-Bot-Key
-    listing_fast_pages_max: int = 6  # ...e massime, se continuano a comparire ordinanze nuove
     walk_always: bool = False  # canale a numeri anche quando l'elenco funziona (di norma solo di riserva)
 
     welcome_existing_members: bool = True
@@ -89,6 +95,8 @@ class Config:
         c.anas_route = _str("ANAS_ROUTE", c.anas_route)
         c.worker_url = _str("WORKER_URL", c.worker_url)
         c.request_delay_seconds = float(_str("REQUEST_DELAY_SECONDS", str(c.request_delay_seconds)))
+        c.max_pdf_per_run = _int("MAX_PDF_PER_RUN", c.max_pdf_per_run)
+        c.block_pause_minutes = _int("BLOCK_PAUSE_MINUTES", c.block_pause_minutes)
         c.max_requests_per_cycle = _int("MAX_REQUESTS_PER_CYCLE", c.max_requests_per_cycle)
         c.max_gap = _int("MAX_GAP", c.max_gap)
         c.missing_retry_hours = _int("MISSING_RETRY_HOURS", c.missing_retry_hours)

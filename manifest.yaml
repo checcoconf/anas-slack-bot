@@ -4,7 +4,7 @@
 # 2. Su https://api.slack.com/apps -> Create New App -> From a manifest, incolla e crea
 #    (per un'app esistente: la tua app -> "App Manifest", incolla e salva).
 display_information:
-  name: ANAS Chiusure
+  name: anas-bot
   description: Chiusure e limiti di velocità dalle ordinanze ANAS, per gli editor Waze Italia
   background_color: "#1f3a5f"
 features:
@@ -13,7 +13,7 @@ features:
     messages_tab_enabled: true
     messages_tab_read_only_enabled: true
   bot_user:
-    display_name: anas-chiusure
+    display_name: anas-bot
     always_online: true
   slash_commands:
     - command: /anas

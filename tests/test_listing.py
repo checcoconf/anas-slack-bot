@@ -7,10 +7,10 @@ from pathlib import Path
 
 import pytest
 
-from anas_bot.anas.listing import STRUCTURE_REGIONS, Structure, everyone, parse_structures, record_to_ordinanza
+from anas_bot.anas.listing import ITALY, STRUCTURE_REGIONS, Structure, everyone, parse_structures, record_to_ordinanza
 from anas_bot.anas.parser import CLOSURE, OTHER, parse_ordinanza
 from anas_bot.anas.vocabolario import KNOWN_MEASURES, unknown_measures
-from anas_bot.anas.client import TransientError
+from anas_bot.anas.client import BlockedError, TransientError
 from anas_bot.config import Config
 from anas_bot.db import Database
 from anas_bot.geo import REGIONS
@@ -131,7 +131,11 @@ def _closure(id_, start, end="30/11/2026", numero="900/2026/BA"):
 
 
 class FakeListing:
-    """Elenco finto: 5 risultati per pagina, le ordinanze in cima alla lista sono le più recenti."""
+    """Elenco finto: 5 risultati per pagina, le ordinanze in cima alla lista sono le più recenti.
+
+    La ricerca "tutta Italia" ("*") alterna le strutture partendo dalla cima di ciascuna: come sul
+    sito vero, ciò che viene inserito in testa (insert(0, ...)) è "appena pubblicato" e sta in prima
+    pagina, ciò che viene aggiunto in coda (append) sta in fondo."""
 
     def __init__(self, pages: dict[str, list[dict]]):
         self.pages = pages
@@ -141,9 +145,16 @@ class FakeListing:
     def structures(self, day=None):
         return [Structure(c, {"BA": "Puglia", "MI": "Lombardia"}[c]) for c in self.pages]
 
+    def _italy(self) -> list[dict]:
+        out, i = [], 0
+        while any(i < len(recs) for recs in self.pages.values()):
+            out.extend(recs[i] for recs in self.pages.values() if i < len(recs))
+            i += 1
+        return out
+
     def search_page(self, code, day, page):
         self.calls.append((code, page))
-        recs = self.pages[code]
+        recs = self._italy() if code == ITALY else self.pages[code]
         return {"tot_pagine": (len(recs) + 4) // 5, "tot_record": len(recs),
                 "results": copy.deepcopy(recs[(page - 1) * 5: page * 5])}
 
@@ -164,9 +175,8 @@ def env(tmp_path):
 
 
 def _install(p, listing):
-    """Primo giorno: legge tutte le strutture per intero (fase iniziale silenziosa)."""
-    for _ in listing.pages:
-        p.run(date(2026, 11, 1))
+    """Primo giro: legge le prime pagine della ricerca "tutta Italia" e segna tutto come già visto."""
+    p.run(date(2026, 11, 1))
 
 
 def test_old_ordinances_are_never_notified(env):
@@ -184,7 +194,7 @@ def test_new_closure_at_top_of_list_is_notified_next_run(env):
     r = p.run(date(2026, 11, 2))
     assert r.new == 1 and r.relevant == 1
     assert [o.ord_id for o in db.pending_ordinanze()] == [212000]
-    assert ("MI", 1) in listing.calls                   # trovata dalla lettura veloce della prima pagina
+    assert (ITALY, 1) in listing.calls                 # trovata dalla lettura veloce della prima pagina
 
 
 def test_fast_scan_reads_few_pages_when_nothing_is_new(env):
@@ -194,11 +204,12 @@ def test_fast_scan_reads_few_pages_when_nothing_is_new(env):
     listing.calls.clear()
     p.run(date(2026, 11, 2))
     fast = [c for c in listing.calls if c[1] > 0]
-    assert fast == [("BA", 1), ("MI", 1)]               # niente di nuovo: solo la prima pagina
+    assert fast == [(ITALY, 1)]                         # niente di nuovo: solo la prima pagina
 
 
 def test_new_closure_deep_in_list_is_found_by_full_rotation(env):
     cfg, db, listing, src = env
+    cfg.listing_full_per_run = 1  # rete di sicurezza, spenta di default
     p = ListingPoller(db, listing, src, cfg)
     _install(p, listing)
     listing.pages["BA"].append(_closure(212500, "03/11/2026"))   # in fondo alla lista (pagina 4)
@@ -230,12 +241,13 @@ def test_extension_inherits_from_original_closure(env, monkeypatch):
     p = ListingPoller(db, listing, src, cfg)
     _install(p, listing)
     # nel PDF della proroga si cita l'ordinanza originale 900/2026/BA (una chiusura già vista)
-    src.docs[700] = "ORDINANZA N°950/2026/BA\\nORDINA la proroga dell'ordinanza n. 900/2026/BA fino al 15/12/2026"
-    proroga = {"ID": "700", "TIPO_ORDINANZA": "Proroga", "NUMERO_ORDINANZA": "950/2026/BA", "COMPARTIMENTO": "Bari",
+    # ID alto: pubblicata dopo l'installazione (sotto l'ID "spartiacque" del primo giro è tutto vecchio)
+    src.docs[213700] = "ORDINANZA N°950/2026/BA\\nORDINA la proroga dell'ordinanza n. 900/2026/BA fino al 15/12/2026"
+    proroga = {"ID": "213700", "TIPO_ORDINANZA": "Proroga", "NUMERO_ORDINANZA": "950/2026/BA", "COMPARTIMENTO": "Bari",
                "CAUSA": "Cantiere", "CAUSA_DETT": "", "RIEPILOGO": "", "PROROGA_DATA": "15/12/2026"}
     listing.pages["BA"].insert(0, proroga)
     p.run(date(2026, 11, 2))
-    o = db.get_ordinanza(700)
+    o = db.get_ordinanza(213700)
     assert o.category == CLOSURE and o.extension and o.end_date == "2026-12-15" and o.roads == ["SS16"]
     assert o.number == "950/2026/BA"
 
@@ -256,7 +268,7 @@ def test_real_proroga_of_lane_restriction_is_not_notified(env):
     original = _rec(950, _riep("A2 AUTOSTRADA DEL MEDITERRANEO", "carreggiata Nord,", ["restringimento carreggiata"],
                                "a partire dal <strong>04/09/2026</strong> fino al <strong>31/10/2026</strong>"),
                     numero="459/2026/UC")
-    listing.pages["BA"].append(original)
+    listing.pages["BA"].insert(0, original)
     p = ListingPoller(db, listing, src, cfg)
     _install(p, listing)
     src.docs[213628] = REAL_PROROGA
@@ -301,23 +313,59 @@ def test_known_structures_used_when_menu_is_built_by_javascript(monkeypatch):
     assert {s.code for s in found} == set(L.STRUCTURE_REGIONS)
 
 
-def test_one_structure_in_error_does_not_stop_the_others(env):
+def test_firewall_block_stops_the_run_and_pauses_the_bot(env):
+    """Alla pagina di blocco del firewall: stop immediato, nessuna richiesta per un'ora, poi si riprende."""
     cfg, db, listing, src = env
     p = ListingPoller(db, listing, src, cfg)
     _install(p, listing)
     real = listing.search_page
 
-    def flaky(code, day, page):
-        if code == "BA":
-            raise TransientError("elenco BA: HTTP 500")
-        return real(code, day, page)
-    listing.search_page = flaky
+    def blocked(code, day, page):
+        real(code, day, page)
+        raise BlockedError("firewall ANAS: ricerca * bloccata")
+    listing.search_page = blocked
+    listing.calls.clear()
+    r = p.run(date(2026, 11, 2), now=1000.0)
+    assert r.blocked and r.block_started and "bloccata" in r.error
+    assert listing.calls == [(ITALY, 1)]                 # una richiesta sola: niente nuovi tentativi
+    r = p.run(date(2026, 11, 2), now=1000.0 + 30 * 60)   # mezz'ora dopo: ancora in pausa
+    assert r.blocked and not r.block_started and listing.calls == [(ITALY, 1)]
+    listing.search_page = real
     listing.pages["MI"].insert(0, _closure(212000, "03/11/2026", numero="11/2026/MI"))
-    for _ in range(11):
+    r = p.run(date(2026, 11, 2), now=1000.0 + 61 * 60)   # un'ora dopo: si riprende da soli
+    assert not r.blocked and r.new == 1 and [o.ord_id for o in db.pending_ordinanze()] == [212000]
+
+
+def test_pdf_cap_per_run_defers_the_rest_to_next_run(env):
+    """Poche richieste per giro: oltre il tetto dei PDF, le ordinanze che ne hanno bisogno slittano."""
+    cfg, db, listing, src = env
+    cfg.max_pdf_per_run = 2
+    p = ListingPoller(db, listing, src, cfg)
+    _install(p, listing)
+    for i in range(4):  # 4 chiusure nuove: ognuna vuole il PDF per le province
+        listing.pages["BA"].insert(0, _closure(212000 + i, "03/11/2026"))
+    r = p.run(date(2026, 11, 2))
+    assert r.new == 2 and r.deferred == 2 and len(src.requests) == 2
+    r = p.run(date(2026, 11, 2))
+    assert r.new == 2 and r.deferred == 0 and len(src.requests) == 4
+    assert sorted(o.ord_id for o in db.pending_ordinanze()) == [212000, 212001, 212002, 212003]
+
+
+def test_many_new_ordinances_are_read_across_runs(env):
+    """Se le pagine lette erano ancora tutte nuove, al giro dopo si legge una pagina in più."""
+    cfg, db, listing, src = env
+    cfg.max_pdf_per_run = 100
+    p = ListingPoller(db, listing, src, cfg)
+    _install(p, listing)
+    for i in range(14):  # 14 novità in un colpo: più delle 2 pagine da 5 lette per giro
+        listing.pages["BA"].insert(0, _closure(212000 + i, "03/11/2026"))
+    listing.calls.clear()
+    found = []
+    for _ in range(3):
         r = p.run(date(2026, 11, 2))
-        assert r.skipped == ["BA"] and not r.error and not r.stuck
-    assert [o.ord_id for o in db.pending_ordinanze()] == [212000]   # Milano arriva lo stesso
-    assert p.run(date(2026, 11, 2)).stuck == ["BA"]                  # dopo 12 giri: avviso
+        found.append(r.new)
+    assert found == [9, 5, 0] and sum(found) == 14      # (in pagina 1 c'è anche la vecchia di Milano)
+    assert [c[1] for c in listing.calls] == [1, 2, 1, 2, 3, 4, 1]  # 2 pagine, poi fino alla 4ª, poi 1
 
 
 def test_search_retries_once_with_fresh_session_after_http_500():

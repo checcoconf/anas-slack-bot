@@ -31,7 +31,7 @@ from datetime import date
 from html.parser import HTMLParser
 
 from ..geo import norm
-from .client import AnasClient, TransientError
+from .client import AnasClient, BlockedError, TransientError, is_block_page
 from .robots import ROBOTS_PATH, RobotsPolicy
 from .parser import (
     CLOSURE,
@@ -49,6 +49,7 @@ log = logging.getLogger(__name__)
 
 SITE = "https://www.stradeanas.it"
 PAGE_URL = SITE + "/it/ordinanze-web"
+ITALY = "*"  # "area_compartimentale" per cercare in tutta Italia, senza scegliere la struttura
 MAX_RESULTS = 1000  # il sito mostra al massimo 1.000 risultati per ricerca
 SEARCH_URL = SITE + "/anas_ordinanzeweb/searchordinanze"
 ROBOTS_URL = SITE + ROBOTS_PATH
@@ -198,7 +199,7 @@ class ListingClient:
             policy = RobotsPolicy.disallow_all(ua)
         else:
             log.info("robots.txt non presente (HTTP %s): nessuna restrizione dichiarata", r.status_code)
-            policy = RobotsPolicy.allow_all(ua)
+            policy = RobotsPolicy.from_text("", ua)  # text="" = letto dal sito, vuoto: si può mettere in cache
         self.anas.robots = policy
         return policy
 
@@ -213,6 +214,8 @@ class ListingClient:
                      r.headers["x-relay-colo"], r.headers.get("cf-placement", "non indicata"))
         if r.status_code >= 500:
             log.warning("Pagina Ordinanze Web: HTTP %s: %s", r.status_code, describe_error_page(r.text))
+            if is_block_page(r.text):
+                raise BlockedError("firewall ANAS: pagina Ordinanze Web bloccata")
         if r.status_code != 200:
             raise TransientError(f"pagina Ordinanze Web: HTTP {r.status_code}")
         self.last_page_html = r.text
@@ -267,6 +270,10 @@ class ListingClient:
                 r = self.session.post(SEARCH_URL, data=data, headers=headers, timeout=self.anas.timeout)
             except Exception as exc:  # noqa: BLE001 - rete: riprovare al prossimo giro
                 raise TransientError(f"elenco: {exc}") from exc
+            if r.status_code >= 500 and is_block_page(r.text):
+                # quarantena del firewall: riprovare la allungherebbe soltanto
+                log.warning("Elenco %s pagina %s: %s", code, page, describe_error_page(r.text, 200))
+                raise BlockedError(f"firewall ANAS: ricerca {code} bloccata")
             if r.status_code < 500 or attempt == 2:
                 break
             # il sito a volte risponde 500: riapro la pagina (cookie nuovi) e riprovo una volta
@@ -305,6 +312,8 @@ class ListingClient:
         for attempt in range(retries + 1):
             try:
                 return call()
+            except BlockedError:
+                raise  # quarantena del firewall: riprovare la allunga soltanto
             except TransientError as exc:
                 if attempt == retries:
                     raise

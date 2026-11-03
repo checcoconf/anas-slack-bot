@@ -8,7 +8,7 @@ from anas_bot.anas.client import TransientError
 from anas_bot.anas.listing import PAGE_URL, SEARCH_URL, ListingClient
 from anas_bot.anas.robots import RobotsPolicy
 
-UA = "WazeItaliaAnasBot/1.0"
+UA = "WazeItaliaAnasBot"
 
 # robots.txt reale di stradeanas.it (02/11/2026), ridotto alle righe che contano
 REAL_ROBOTS = """

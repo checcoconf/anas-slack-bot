@@ -34,7 +34,7 @@ DEFAULT_URL = "https://www.stradeanas.it/it/anas_ordinanzeweb/getordinanzapdf?or
 
 def _client(args) -> AnasClient:
     return AnasClient(os.environ.get("ANAS_PDF_URL", DEFAULT_URL),
-                      os.environ.get("ANAS_USER_AGENT", "WazeItaliaAnasBot/1.0 (collaudo)"),
+                      os.environ.get("ANAS_USER_AGENT", "WazeItaliaAnasBot"),
                       delay_seconds=args.delay)
 
 

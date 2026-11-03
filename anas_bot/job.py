@@ -28,11 +28,12 @@ from .anas.client import AnasClient, TransientError
 from .anas.listing import ListingClient
 from .anas.pdftext import pdf_to_text
 from .anas.relay import choose_route
+from .anas.robots import RobotsPolicy
 from .config import Config
 from .db import D1Http, Database, LocalSqlite, schema_statements
 from .membership import Membership, build_web_client
 from .notifier import Notifier
-from .listing_poller import ListingPoller
+from .listing_poller import BLOCKED_UNTIL, ListingPoller
 from .poller import PdfSource, Poller
 
 log = logging.getLogger("anas_bot")
@@ -79,16 +80,17 @@ def run(cfg: Config, db: Database, client, source, listing=None) -> int:
         nres = notifier.run(today)
         fetched, relevant = lres.new, lres.relevant
         sent, users = nres.messages_sent, nres.users_notified
-        log.info("Elenco ufficiale: %d strutture, %d richieste, %d ordinanze viste, %d nuove (%d utili, "
-                 "%d già in vigore prima del bot), %d corrette, lettura completa: %s%s%s",
-                 len(lres.structures), lres.requests, lres.seen, lres.new, lres.relevant, lres.silent,
-                 lres.upgraded, ",".join(lres.full) or "-",
-                 f", saltate: {','.join(lres.skipped)}" if lres.skipped else "",
+        log.info("Elenco ufficiale: %d richieste all'elenco (%d in tutto ad ANAS), %d ordinanze viste, %d nuove "
+                 "(%d utili, %d già in vigore prima del bot), %d corrette, %d rimandate, lettura completa: %s%s",
+                 lres.requests, getattr(getattr(source, "client", None), "requests_made", 0), lres.seen, lres.new, lres.relevant,
+                 lres.silent, lres.upgraded, lres.deferred, ",".join(lres.full) or "-",
                  f", errore: {lres.error}" if lres.error else "")
         _listing_alerts(db, client, cfg, lres)
 
-    # 2) Canale a numeri: di riserva, se l'elenco non è disponibile (o se richiesto con WALK_ALWAYS)
-    if listing is None or (lres and lres.error) or cfg.walk_always:
+    # 2) Canale a numeri: di riserva, se l'elenco non è disponibile (o se richiesto con WALK_ALWAYS).
+    #    Mai durante la pausa dopo un blocco del firewall: insistere la allungherebbe.
+    blocked = bool(lres and lres.blocked)
+    if not blocked and (listing is None or (lres and lres.error) or cfg.walk_always):
         poller = Poller(db, source, cfg)
         while True:
             pres = poller.run_cycle()
@@ -147,10 +149,12 @@ def _listing_alerts(db: Database, client, cfg: Config, lres) -> None:
         lfailed = 0
     db.set("listing_failed_runs", str(lfailed))
 
-    if lres.stuck:
-        admin(client, cfg, "⚠️ Ordinanze Web: da 3 ore il sito risponde con un errore per "
-                           + ", ".join(lres.stuck) + ". Le ordinanze di quelle zone arriveranno quando "
-                           "il sito tornerà a rispondere; se continua, controlla con collaudo/elenco.bat.")
+    if lres.block_started:
+        blocks = int(db.get("anas_blocks_total", "0") or 0) + 1
+        db.set("anas_blocks_total", str(blocks))
+        admin(client, cfg, f"🧱 Il firewall di ANAS ci ha bloccati (blocco n. {blocks}): {lres.error}. "
+                           f"Nessuna richiesta per {cfg.block_pause_minutes} minuti, poi si riprende da soli. "
+                           "Se succede spesso, alza REQUEST_DELAY_SECONDS o abbassa MAX_PDF_PER_RUN.")
 
     if lres.unknown:
         already = set(json.loads(db.get("alerted_measures", "[]") or "[]"))
@@ -177,14 +181,31 @@ def main() -> int:
     if cfg.anas_bot_key:
         anas.session.headers["X-Waze-Bot-Key"] = cfg.anas_bot_key  # se ANAS ci riconosce da questo codice
     listing = ListingClient(anas)
-    try:
-        route = choose_route(cfg.anas_route, db, anas, cfg.slack_bot_token, listing.prime, cfg.worker_url)
-        log.info("Collegamento ad ANAS: %s", route)
-        listing.load_robots()  # da crawler educato: rispetta robots.txt e crawl-delay
-    except TransientError as exc:
-        log.warning("ANAS non raggiungibile né direttamente né dal ponte del Worker: %s", exc)
+    blocked_until = float(db.get(BLOCKED_UNTIL, "0") or 0)
+    if blocked_until > time.time():
+        log.warning("In pausa dopo un blocco del firewall ANAS: nessuna richiesta in questo giro")
+    else:
+        try:
+            route = choose_route(cfg.anas_route, db, anas, cfg.slack_bot_token, listing.prime, cfg.worker_url)
+            log.info("Collegamento ad ANAS: %s", route)
+            load_robots_cached(db, listing)  # da crawler educato: rispetta robots.txt e crawl-delay
+        except TransientError as exc:
+            log.warning("ANAS non raggiungibile né direttamente né dal ponte del Worker: %s", exc)
     source = PdfSource(anas, pdf_to_text)
     return run(cfg, db, client, source, listing)
+
+
+def load_robots_cached(db: Database, listing: ListingClient) -> None:
+    """robots.txt letto da ANAS una volta al giorno: ogni richiesta in meno conta per il firewall."""
+    today = datetime.now(ZoneInfo("UTC")).date().isoformat()
+    cached = db.get("robots_txt")
+    if cached is not None and db.get("robots_day") == today:
+        listing.anas.robots = RobotsPolicy.from_text(cached, listing.anas.user_agent)
+        return
+    policy = listing.load_robots()
+    if policy.text is not None:  # letto davvero dal sito (non una policy di prudenza per un errore)
+        db.set("robots_txt", policy.text)
+        db.set("robots_day", today)
 
 
 if __name__ == "__main__":

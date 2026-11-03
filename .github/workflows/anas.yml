@@ -50,6 +50,8 @@ jobs:
           ANAS_ROUTE: ${{ vars.ANAS_ROUTE }}
           LISTING_FULL_EVERY_RUNS: ${{ vars.LISTING_FULL_EVERY_RUNS }}
           REQUEST_DELAY_SECONDS: ${{ vars.REQUEST_DELAY_SECONDS }}
+          MAX_PDF_PER_RUN: ${{ vars.MAX_PDF_PER_RUN }}
+          BLOCK_PAUSE_MINUTES: ${{ vars.BLOCK_PAUSE_MINUTES }}
           # codice concordato con ANAS per l'eccezione nel loro firewall (se ve lo danno)
           ANAS_BOT_KEY: ${{ secrets.ANAS_BOT_KEY }}
           WORKER_URL: ${{ vars.WORKER_URL }}

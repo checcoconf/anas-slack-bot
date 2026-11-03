@@ -31,7 +31,7 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from anas_bot.anas.client import AnasClient, TransientError
+from anas_bot.anas.client import AnasClient, BlockedError, TransientError
 from anas_bot.anas.listing import MAX_RESULTS, ListingClient, ListingError, Structure, record_to_ordinanza, split_provisions
 from anas_bot.anas.vocabolario import KNOWN_MEASURES, measure_key
 
@@ -141,6 +141,10 @@ def download(listing: ListingClient, out: Path, only: set[str], pr: Progress) ->
             tmp.replace(raw_dir / f"{st.code}.jsonl")  # completata: salvata in modo definitivo
             if listing.last_total_records >= MAX_RESULTS:
                 pr.say(f"   ⚠ {st.code} ha almeno {MAX_RESULTS} ordinanze: il sito ne mostra solo {MAX_RESULTS}!")
+        except BlockedError as exc:
+            pr.say(f"   ✖ {st.code} {st.label}: il firewall di ANAS ci ha messi in quarantena ({exc}).")
+            pr.say("     Mi fermo subito: insistere allunga il blocco. Riprova tra un'ora, riprende da qui.")
+            raise
         except (TransientError, ListingError) as exc:
             errors.append(f"{st.code}: {exc}")
             pr.say(f"   ✖ {st.code} {st.label}: BLOCCATO dopo {RETRIES} tentativi ({exc}). Passo alla successiva.")
@@ -239,7 +243,8 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="python -m collaudo.elenco", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--out", default="elenco")
-    ap.add_argument("--delay", type=float, default=1.0)
+    ap.add_argument("--delay", type=float, default=15.0,
+                    help="secondi tra una richiesta e l'altra (il firewall di ANAS blocca ~9 richieste in un minuto)")
     ap.add_argument("--only", default="", help="solo queste strutture, es. BA,MI (per una prova veloce)")
     ap.add_argument("--restart", action="store_true", help="ricomincia da zero invece di riprendere")
     args = ap.parse_args(argv)
@@ -251,7 +256,7 @@ def main(argv: list[str] | None = None) -> int:
                 f.unlink()
     out.mkdir(parents=True, exist_ok=True)
     anas = AnasClient(os.environ.get("ANAS_PDF_URL", PDF_URL),
-                      os.environ.get("ANAS_USER_AGENT", "WazeItaliaAnasBot/1.0 (collaudo elenco)"), args.delay)
+                      os.environ.get("ANAS_USER_AGENT", "WazeItaliaAnasBot"), args.delay)
     listing = ListingClient(anas)
     pr = Progress()
     pr.say("Avvio. Ogni riga con l'orario indica che il lavoro sta andando avanti.")
@@ -259,6 +264,10 @@ def main(argv: list[str] | None = None) -> int:
     try:
         structures, total_italy, errors = download(listing, out, {c.strip().upper() for c in args.only.split(",")
                                                                   if c.strip()}, pr)
+    except BlockedError as exc:
+        pr.say(f"✖ QUARANTENA DEL FIREWALL: {exc}")
+        pr.say("Nessun'altra richiesta: il blocco dura al massimo un'ora se non si insiste. Rilancia più tardi.")
+        return 1
     except (TransientError, ListingError) as exc:
         pr.say(f"✖ BLOCCATO: {exc}")
         pr.say("Il sito non risponde o ha cambiato formato. Rilancia più tardi; se si ripete, manda elenco.log in chat.")

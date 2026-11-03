@@ -1,4 +1,4 @@
-# ANAS Chiusure: bot Slack per Waze Italia
+# anas-bot: bot Slack per Waze Italia
 
 Il bot avvisa in privato gli editor quando ANAS pubblica un'ordinanza utile per la mappa:
 
@@ -62,7 +62,7 @@ Non serve installare niente sul PC. Ti servono un account **GitHub** e un accoun
 3. **Install to Workspace** e autorizza.
 4. Annota il **Bot User OAuth Token** (*OAuth & Permissions*, inizia con `xoxb-`). → `SLACK_BOT_TOKEN`
 5. Annota il **Signing Secret** (*Basic Information → App Credentials*). → `SLACK_SIGNING_SECRET`
-6. Nel canale di test scrivi `/invite @anas-chiusure` e annota l'**ID del canale** (dettagli del canale, in fondo, tipo `C0123ABCD`). → `SLACK_CHANNEL_IDS`
+6. Nel canale di test scrivi `/invite @anas-bot` e annota l'**ID del canale** (dettagli del canale, in fondo, tipo `C0123ABCD`). → `SLACK_CHANNEL_IDS`
 7. Consigliato: un canale per gli avvisi tecnici, con il bot invitato. → `ADMIN_CHANNEL_ID`
 
 ### 4. Repository GitHub vuota
@@ -97,7 +97,7 @@ Scheda **Variables** (*New repository variable*):
 |---|---|
 | `SLACK_CHANNEL_IDS` | ID del canale (di test, per ora) |
 | `ADMIN_CHANNEL_ID` | ID del canale tecnico (facoltativo) |
-| `ANAS_USER_AGENT` | es. `WazeItaliaAnasBot/1.0 (+mailto:tuo@email.it)` |
+| `ANAS_USER_AGENT` | facoltativo: di default `WazeItaliaAnasBot` |
 | `WELCOME_EXISTING_MEMBERS` | `true` per accogliere anche chi è già nel canale |
 
 ### 7. Carica il codice
@@ -117,7 +117,7 @@ Scheda **Variables** (*New repository variable*):
 2. Nel log devono comparire `Elenco ufficiale: 23 strutture, …` e `Fine giro: …`. Nel canale tecnico arriva 🤖 *Bot attivo*.
 3. Esci e rientra nel canale: deve arrivarti il benvenuto 👋.
 
-**Le prime 5-6 ore sono di "presa visione".** Il bot legge per intero una struttura ANAS per giro (23 strutture, quindi 23 giri) e segna come già viste le circa 4.000 ordinanze in vigore, **senza mandarle**. Fanno eccezione quelle che iniziano dal giorno dell'installazione in poi: quelle sono novità per la mappa e arrivano subito. Le ordinanze pubblicate dopo l'installazione arrivano sempre, fin dal primo giro.
+**Il primo giro è di "presa visione".** Il bot legge le prime pagine dell'elenco e segna come già viste le ordinanze trovate, **senza mandarle**; tutto ciò che sta più in basso (le circa 4.000 ordinanze già in vigore) è considerato vecchio. Fanno eccezione quelle che iniziano dal giorno dell'installazione in poi: quelle sono novità per la mappa e arrivano subito. Le ordinanze pubblicate dopo l'installazione arrivano sempre, fin dal primo giro.
 
 ### Dal canale di test a quello vero
 
@@ -138,10 +138,12 @@ Possono cambiare le zone o mettere in pausa dalla scheda **Home** dell'app o con
 - **I log di Actions sono pubblici** su una repo pubblica: il codice non scrive mai ID utente, e i token stanno nei Secrets.
 - **La pianificazione di riserva** nel workflow (ogni 3 ore) viene sospesa da GitHub dopo 60 giorni senza commit. Non è un problema: il giro normale lo avvia il Worker.
 - **Dopo un'interruzione si riparte da dove ci si era fermati**, sia per ANAS sia per Slack: il cursore e la coda stanno in D1. Se l'arretrato è grande, il job prosegue nello stesso giro finché ha tempo.
-- **Come trova tutte le ordinanze nuove.** La fonte è l'elenco ufficiale di Ordinanze Web, che mostra le ordinanze dalla più recente (verificato su tutte le 3.718 ordinanze in vigore il 02/11/2026). A ogni giro, cioè ogni 15 minuti:
-  - **lettura veloce:** per ognuna delle 23 strutture ANAS legge la prima pagina (fino a 6 se ci sono molte novità) e si ferma quando non trova più niente di nuovo. Un'ordinanza nuova arriva quindi entro 15-20 minuti, qualunque numero abbia;
-  - **lettura completa a rotazione:** rilegge per intero una struttura ogni ora (una per giro durante l'installazione), come rete di sicurezza per le ordinanze che il sito non mettesse in cima.
-  In tutto circa 30 richieste per giro, a ritmo lento (3 secondi l'una): il firewall di ANAS blocca chi ne fa troppe.
+- **Come trova le ordinanze nuove, con pochissime richieste.** Il firewall di ANAS (FortiWeb) mette in quarantena per un po' chi fa più di una manciata di richieste in poco tempo (collaudo del 03/11/2026: bloccati alla 9ª richiesta in 27 secondi, qualunque sia l'indirizzo di partenza). Per questo ogni giro, cioè ogni 15 minuti, il bot fa **al massimo 6-7 richieste**, distanziate di 15 secondi:
+  - **una sola ricerca "tutta Italia"** (senza scegliere la struttura), che il sito ordina dalla più recente: 1-2 pagine da 5 ordinanze. Si ferma appena una pagina non contiene niente di nuovo; se erano tutte nuove, al giro dopo legge una pagina in più;
+  - **al massimo 3 PDF** per giro (proroghe, revoche, province delle chiusure): le altre ordinanze che ne hanno bisogno slittano al giro dopo;
+  - robots.txt letto una volta al giorno.
+  Un'ordinanza nuova arriva quindi entro 15-20 minuti, qualunque numero e struttura abbia. La vecchia lettura completa di una struttura alla volta (30-60 richieste) è spenta: `LISTING_FULL_PER_RUN=1` per riaccenderla.
+- **Se il firewall blocca lo stesso**, il bot riconosce la pagina "Web Page Blocked" e **si ferma subito**: nessun nuovo tentativo, nessun canale di riserva, e per un'ora (`BLOCK_PAUSE_MINUTES`) nessuna richiesta ad ANAS. Insistere durante la quarantena la allunga; un blocco non "alimentato" scade da solo. Arriva un avviso 🧱 nel canale admin. Vale anche per `collaudo/elenco.py`, che ora va a 15 secondi per richiesta e si ferma al primo blocco.
 - **Come classifica.** Usa il riepilogo strutturato dell'elenco (tratta, corsie, provvedimenti, destinatari, date). Le regole sono state scritte sul vocabolario reale di ANAS: 77 tipi di provvedimento, raccolti in `anas_bot/anas/vocabolario.py`.
   - ⛔ è chiusura: *chiusura al traffico*, *divieto di transito*, *interdizione*, *sospensione della circolazione*, se valgono **per tutti** e su tutta la carreggiata (o su una rampa/svincolo);
   - ✅ è apertura: *apertura al traffico* e *riapertura*; 🆕 se è una strada nuova;
@@ -155,7 +157,7 @@ Possono cambiare le zone o mettere in pausa dalla scheda **Home** dell'app o con
   - se l'elenco ufficiale non si legge più per 3 ore, o subito se ha cambiato formato;
   - se una struttura supera i 1.000 risultati (il sito ne mostra al massimo 1.000, quindi l'elenco sarebbe incompleto);
   - se non arrivano ordinanze nuove da 3 giorni.
-- **Impostazioni facoltative** (Variables di GitHub): `LISTING_FAST_PAGES_MIN` / `LISTING_FAST_PAGES_MAX` (pagine della lettura veloce, default 1 e 6), `LISTING_FULL_PER_RUN` (strutture lette per intero a ogni turno, default 1), `LISTING_FULL_EVERY_RUNS` (un turno di lettura completa ogni N giri, default 4), `REQUEST_DELAY_SECONDS` (pausa tra le richieste, default 3), secret `ANAS_BOT_KEY` (codice concordato con ANAS, mandato nell'intestazione `X-Waze-Bot-Key`), `WALK_ALWAYS=true` (usa sempre anche il canale a numeri), `ANAS_START_ID` (numero da cui parte il canale a numeri se l'elenco non è mai stato letto).
+- **Impostazioni facoltative** (Variables di GitHub): `LISTING_FAST_PAGES_MIN` / `LISTING_FAST_PAGES_MAX` (pagine della ricerca "tutta Italia" per giro, default 1 e 2), `LISTING_FULL_PER_RUN` (strutture lette per intero a ogni turno, default 0 = mai), `LISTING_FULL_EVERY_RUNS` (un turno di lettura completa ogni N giri, default 4), `REQUEST_DELAY_SECONDS` (pausa tra le richieste, default 15), `MAX_PDF_PER_RUN` (PDF per giro, default 3), `BLOCK_PAUSE_MINUTES` (pausa dopo un blocco del firewall, default 60), secret `ANAS_BOT_KEY` (codice concordato con ANAS, mandato nell'intestazione `X-Waze-Bot-Key`), `WALK_ALWAYS=true` (usa sempre anche il canale a numeri), `ANAS_START_ID` (numero da cui parte il canale a numeri se l'elenco non è mai stato letto).
 - **Il sito ANAS non accetta collegamenti dai server di GitHub** (negli Stati Uniti): la connessione scade senza risposta. Per questo il Worker fa da **ponte**: gira vicino a Milano (`placement` in `worker/wrangler.jsonc`) e legge le pagine ANAS per conto del job (`worker/src/relay.js`). Il bot prova prima il collegamento diretto e, se non va, passa da solo al ponte e se lo ricorda (`ANAS_ROUTE=auto`; si può forzare con `direct` o `worker`). Il ponte accetta solo richieste firmate dal job e inoltra solo verso www.stradeanas.it. L'indirizzo del Worker il job lo trova da solo nel database: il Worker lo salva ogni volta che Slack lo chiama o che apri `/health`.
 - **Se ANAS non risponde** né direttamente né dal ponte, arriva un avviso ⚠️ nel canale admin dopo circa 3 ore.
 - **Se modifichi il benvenuto o il modulo** in `anas_bot/views.py`, lancia `python -m anas_bot.export_worker` e carica anche `worker/src/generated.js`: il Worker si ripubblica da solo. Un test ti avvisa se te ne dimentichi.

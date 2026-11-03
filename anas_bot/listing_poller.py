@@ -1,18 +1,22 @@
 """Giro sull'elenco ufficiale di Ordinanze Web: la fonte principale delle ordinanze.
 
-Il collaudo del 02/11/2026 (3.718 ordinanze reali) ha mostrato che il sito elenca le
-ordinanze dalla più recente: in tutte le strutture le 10 più nuove stanno nelle prime
-2-4 pagine. Per questo a ogni giro:
+Il sito elenca le ordinanze dalla più recente (collaudo del 02/11/2026, 3.718 ordinanze reali)
+e il suo firewall mette in quarantena chi fa più di una manciata di richieste in poco tempo
+(collaudo del 03/11/2026: bloccati alla 9ª richiesta in 27 secondi). Per questo ogni giro fa
+pochissime richieste, distanziate:
 
-1. LETTURA VELOCE: per ognuna delle 23 strutture legge le prime pagine e si ferma appena
-   una pagina non contiene niente di nuovo (minimo 2, massimo 6 pagine). Così ogni
-   ordinanza nuova arriva entro un giro (15 minuti), qualunque numero abbia.
-2. LETTURA COMPLETA a rotazione (una struttura per giro): rete di sicurezza per le
-   ordinanze che il sito non mettesse in cima.
+1. LETTURA VELOCE "TUTTA ITALIA": una sola ricerca senza struttura (area "*"), ordinata dalla
+   più recente, 1-2 pagine da 5. Si ferma appena una pagina non contiene niente di nuovo.
+   Se l'ultima pagina letta era ancora tutta nuova, al giro dopo legge una pagina in più.
+2. PDF: al massimo MAX_PDF_PER_RUN per giro (proroghe, revoche, province delle chiusure);
+   le ordinanze che ne hanno bisogno oltre il tetto restano "nuove" e slittano al giro dopo.
+3. BLOCCO: alla prima pagina di blocco del firewall il giro si ferma e il bot non fa richieste
+   ad ANAS per BLOCK_PAUSE_MINUTES. Insistere durante la quarantena la allunga soltanto.
+4. LETTURA COMPLETA a rotazione (una struttura per intero): disponibile ma spenta
+   (LISTING_FULL_PER_RUN=0), costa decine di richieste.
 
-Niente ordinanze vecchie: finché una struttura non è stata letta per intero la prima volta,
-le ordinanze trovate vengono solo segnate come viste, tranne quelle che iniziano dal giorno
-di installazione in poi.
+Niente ordinanze vecchie: al primo giro le ordinanze trovate vengono solo segnate come viste,
+tranne quelle che iniziano dal giorno di installazione in poi.
 
 Proroghe e revoche non hanno riepilogo nell'elenco: si legge il PDF e, se cita un'ordinanza
 già vista dal bot, ne eredita strada, km e tipo (una proroga di una chiusura resta una chiusura).
@@ -27,8 +31,9 @@ import time
 from dataclasses import dataclass, field
 from datetime import date
 
-from .anas.client import TransientError
+from .anas.client import BlockedError, TransientError
 from .anas.listing import (
+    ITALY,
     MAX_RESULTS,
     ListingClient,
     ListingError,
@@ -42,11 +47,12 @@ from .anas.vocabolario import unknown_measures
 from .config import Config
 from .db import RELEVANT, Database
 from .geo import PROVINCE_BY_CODE, find_provinces, norm
+from .poller import BLOCKED_UNTIL  # chiave in D1: time.time() fino a cui non si interroga ANAS
 
 log = logging.getLogger(__name__)
 
 _REF_NUMBER = re.compile(r"\b(\d{1,5})\s*/\s*(\d{4})\s*/\s*([A-Z]{2,3})\b")
-STUCK_AFTER_RUNS = 12  # 3 ore
+MAX_CARRY_PAGES = 6  # pagine in più che la lettura veloce può accumulare se arrivano molte novità
 UNREAD = 0  # parser_version delle ordinanze segnate come viste senza leggerne il PDF
 _INHERITED = ("category", "roads", "road_names", "km_from", "km_to", "provinces", "regions", "province_inferred",
               "start_date", "time_window", "speed_kmh", "speeds", "ramp_only", "new_road", "direction", "excerpt")
@@ -64,10 +70,11 @@ class ListingResult:
     upgraded: int = 0
     unknown: dict[str, str] = field(default_factory=dict)  # provvedimento mai visto -> link al PDF
     max_id: int = 0  # numero più alto visto: tiene vicino al presente il canale a numeri di riserva
-    skipped: list[str] = field(default_factory=list)  # strutture non lette in questo giro
-    stuck: list[str] = field(default_factory=list)    # strutture in errore da 12 giri di fila (3 ore)
+    deferred: int = 0  # ordinanze rimandate al giro dopo perché il tetto dei PDF era esaurito
     error: str = ""
     broken: bool = False  # il formato dell'elenco è cambiato
+    blocked: bool = False  # il firewall ci ha bloccati (o siamo ancora in pausa dopo un blocco)
+    block_started: bool = False  # il blocco è scattato in questo giro (per l'avviso in admin)
 
 
 class ListingPoller:
@@ -76,6 +83,15 @@ class ListingPoller:
         self.listing = listing
         self.source = source  # PdfSource: per proroghe/revoche e per trovare le province
         self.cfg = cfg
+        self.pdf_budget = cfg.max_pdf_per_run  # PDF ancora scaricabili in questo giro
+        self.watermark = 0  # ID più alto visto al primo giro: sotto è "già in vigore prima del bot"
+
+    def _fetch_text(self, ord_id: int) -> str | None:
+        """Testo del PDF, oppure None se il tetto dei PDF per giro è esaurito (si riprova al giro dopo)."""
+        if self.pdf_budget <= 0:
+            return None
+        self.pdf_budget -= 1
+        return self.source.fetch_text(ord_id)
 
     # --- strutture, riscoperte una volta a settimana ----------------------------
     def structures(self, today: date) -> list[Structure]:
@@ -112,7 +128,7 @@ class ListingPoller:
         """Proroghe, revoche e ordinanze senza riepilogo: PDF + eventuale ordinanza originale citata."""
         ord_id = int(rec["ID"])
         url = self.source.url_for(ord_id)
-        text = self.source.fetch_text(ord_id)
+        text = self._fetch_text(ord_id)
         if text is None:
             return None, ""
         own = (rec.get("NUMERO_ORDINANZA") or "").replace("\\/", "/").upper()
@@ -143,8 +159,11 @@ class ListingPoller:
         url = self.source.url_for(ord_id)
         o = record_to_ordinanza(rec, st.label, url)
         text = ""
+        # "vecchia": trovata al primo giro, oppure più in basso di tutto ciò che il primo giro aveva visto
+        # (gli ID crescono con la pubblicazione): si segna come vista, salvo che inizi dopo l'installazione
+        old = baseline or (self.watermark and ord_id <= self.watermark)
         if o is None:
-            if baseline:  # già in vigore prima del bot: si segna come vista senza scaricare il PDF
+            if old:  # già in vigore prima del bot: si segna come vista senza scaricare il PDF
                 o = Ordinanza(ord_id=ord_id, category=OTHER, pdf_url=url, parser_version=UNREAD)
                 apply_record_fields(o, rec, st.label)
                 self.db.save_ordinanza(o, "", silent=True)
@@ -153,11 +172,15 @@ class ListingPoller:
                 return
             o, text = self._from_pdf(rec, st)
             if o is None:
-                return  # PDF non ancora pubblicato: riprova alla prossima lettura
-        silent = baseline and not (o.start_date and o.start_date >= installed)
+                res.deferred += 1
+                return  # PDF non ancora pubblicato, o tetto dei PDF esaurito: riprova al giro dopo
+        silent = bool(old) and not (o.start_date and o.start_date >= installed)
         if not silent:
             if o.category in RELEVANT and not text:  # utile: le province dai destinatari del PDF
-                text = self.source.fetch_text(ord_id) or ""
+                if self.pdf_budget <= 0:
+                    res.deferred += 1
+                    return  # tetto dei PDF esaurito: la rimandiamo intera al giro dopo
+                text = self._fetch_text(ord_id) or ""
                 self._enrich_provinces(o, text)
             measures = [m for p in split_provisions(rec.get("RIEPILOGO", "")) for m in p.measures]
             for m in unknown_measures(measures):
@@ -179,94 +202,55 @@ class ListingPoller:
         new = 0
         for rec in records:
             ord_id = int(rec["ID"])
+            rst = self._record_structure(rec) if st.code == ITALY else st
             if ord_id in known:
                 if not baseline:  # il canale a numeri l'aveva scartata? l'elenco può correggerla
-                    o = record_to_ordinanza(rec, st.label, self.source.url_for(ord_id))
+                    o = record_to_ordinanza(rec, rst.label, self.source.url_for(ord_id))
                     if o and o.category in RELEVANT and self.db.upgrade_from_listing(o):
                         res.upgraded += 1
                 continue
             new += 1
-            self._process(rec, st, baseline, installed, res)
+            self._process(rec, rst, baseline, installed, res)
         return new
 
+    @staticmethod
+    def _record_structure(rec: dict) -> Structure:
+        """La struttura di un risultato della ricerca "tutta Italia": sigla dal numero (723/2026/BA),
+        nome dal campo COMPARTIMENTO."""
+        number = (rec.get("NUMERO_ORDINANZA") or "").replace("\\/", "/")
+        code = number.rsplit("/", 1)[-1].upper() if number.count("/") == 2 else ""
+        return Structure(code or ITALY, rec.get("COMPARTIMENTO") or "Italia")
+
     # --- il giro --------------------------------------------------------------------
-    def run(self, today: date, deadline: float | None = None) -> ListingResult:
-        """deadline: time.monotonic() oltre il quale non si iniziano altre strutture (il resto al giro dopo)."""
+    def run(self, today: date, deadline: float | None = None, now: float | None = None) -> ListingResult:
+        """deadline: time.monotonic() oltre il quale non si iniziano altre letture (il resto al giro dopo).
+        now: time.time() (sostituibile nei test) per la pausa dopo un blocco del firewall."""
         res = ListingResult()
+        now = time.time() if now is None else now
         late = lambda: deadline is not None and time.monotonic() > deadline  # noqa: E731
         installed = self.db.get("installed_on")
         if not installed:
             installed = today.isoformat()
             self.db.set("installed_on", installed)
+
+        # In pausa dopo un blocco del firewall: nessuna richiesta ad ANAS finché non scade
+        blocked_until = float(self.db.get(BLOCKED_UNTIL, "0") or 0)
+        if blocked_until > now:
+            res.blocked = True
+            res.error = f"in pausa dopo un blocco del firewall ANAS, riprendo tra {int((blocked_until - now) / 60) + 1} min"
+            log.warning("Elenco: %s", res.error)
+            return res
+
+        self.pdf_budget = self.cfg.max_pdf_per_run
         try:
-            structures = self.structures(today)
-            failed: list[str] = []
-            # 1) lettura veloce delle prime pagine di tutte le strutture
-            # se un giro finisce il tempo, il successivo riparte dalla prima struttura non letta
-            off = int(self.db.get("listing_fast_rr", "0") or 0) % max(1, len(structures))
-            streak = 0
-            for i, st in enumerate(structures[off:] + structures[:off]):
-                if late():
-                    log.warning("Elenco: tempo del giro finito, %s e seguenti al prossimo giro", st.code)
-                    self.db.set("listing_fast_rr", str((off + i) % len(structures)))
-                    break
-                baseline = self.db.get(f"listing_done_{st.code}") is None
-                # durante l'installazione è tutto "nuovo": bastano le pagine minime, il resto lo fa la rotazione
-                max_pages = self.cfg.listing_fast_pages_min if baseline else self.cfg.listing_fast_pages_max
-                page, pages = 1, 1
-                try:
-                    while page <= min(pages, max_pages):
-                        body = self.listing.search_page(st.code, today, page)
-                        res.requests += 1
-                        pages = int(body.get("tot_pagine") or 0)
-                        new = self._handle_page(body.get("results") or [], st, baseline, installed, res)
-                        if page >= self.cfg.listing_fast_pages_min and new == 0:
-                            break
-                        page += 1
-                except TransientError as exc:  # una struttura in errore non ferma le altre
-                    failed.append(st.code)
-                    streak += 1
-                    log.warning("Elenco: struttura %s saltata in questo giro: %s", st.code, exc)
-                    if streak >= 3:  # il sito sta rifiutando tutto: inutile insistere, si riprova al giro dopo
-                        log.warning("Elenco: 3 strutture di fila in errore, mi fermo e riprovo al prossimo giro")
-                        self.db.set("listing_fast_rr", str((off + i + 1) % len(structures)))
-                        raise TransientError(f"il sito risponde con errori ({', '.join(failed)})") from exc
-                    continue
-                streak = 0
-                res.structures.append(st.code)
-            if structures and len(failed) == len(structures):
-                raise TransientError(f"nessuna struttura leggibile ({', '.join(failed)})")
-            # 2) lettura completa di una struttura a rotazione: a ogni giro durante l'installazione,
-            #    poi un giro ogni LISTING_FULL_EVERY_RUNS (per pesare poco sul sito ANAS)
-            installing = any(self.db.get(f"listing_done_{s.code}") is None for s in structures)
-            tick = int(self.db.get("listing_full_tick", "0") or 0)
-            self.db.set("listing_full_tick", str(tick + 1))
-            due = installing or tick % self.cfg.listing_full_every_runs == 0
-            for st in [] if late() or not due else self._next_full(structures):
-                baseline = self.db.get(f"listing_done_{st.code}") is None
-                try:
-                    records = list(self.listing.iter_structure(st.code, today))
-                except TransientError as exc:
-                    log.warning("Elenco: lettura completa di %s rimandata al prossimo giro: %s", st.code, exc)
-                    continue
-                res.requests += max(1, (len(records) + 4) // 5)
-                if getattr(self.listing, "last_total_records", 0) >= MAX_RESULTS:
-                    raise ListingError(f"la struttura {st.code} supera i {MAX_RESULTS} risultati: "
-                                       "l'elenco sarebbe incompleto, serve dividere la ricerca")
-                self._handle_page(records, st, baseline, installed, res)
-                self.db.set(f"listing_done_{st.code}", today.isoformat())
-                self._advance_full(structures)
-                res.full.append(st.code)
-            for st in structures:
-                key = f"listing_fail_{st.code}"
-                if st.code in failed:
-                    n = int(self.db.get(key, "0") or 0) + 1
-                    self.db.set(key, str(n))
-                    if n == STUCK_AFTER_RUNS:
-                        res.stuck.append(st.code)
-                elif self.db.get(key) not in (None, "0"):
-                    self.db.set(key, "0")
-            res.skipped = failed
+            self._fast_italy(today, installed, res)
+            if self.cfg.listing_full_per_run > 0 and not late():
+                self._full_rotation(today, installed, res)
+        except BlockedError as exc:
+            pause = self.cfg.block_pause_minutes * 60
+            self.db.set(BLOCKED_UNTIL, str(now + pause))
+            res.error, res.blocked, res.block_started = str(exc), True, True
+            log.warning("Elenco: %s. Nessuna richiesta ad ANAS per %d minuti", exc, self.cfg.block_pause_minutes)
         except TransientError as exc:
             res.error = str(exc)
             log.warning("Elenco ANAS non raggiungibile, riprovo al prossimo giro: %s", exc)
@@ -278,3 +262,52 @@ class ListingPoller:
         if res.max_id > (self.db.cursor() or 0):
             self.db.set("anas_cursor", str(res.max_id))
         return res
+
+    def _fast_italy(self, today: date, installed: str, res: ListingResult) -> None:
+        """Lettura veloce: la ricerca "tutta Italia", dalla più recente, poche pagine.
+
+        Al primo giro (baseline) legge le pagine massime e segna tutto come già visto, senza PDF.
+        Poi si ferma alla prima pagina senza novità. Se l'ultima pagina letta era ancora tutta
+        nuova ("carry"), al giro dopo legge almeno una pagina in più: le ordinanze oltre il
+        limite non vanno perse."""
+        st = Structure(ITALY, "Italia")
+        baseline = self.db.get("listing_done_italia") is None
+        self.watermark = int(self.db.get("listing_watermark_id", "0") or 0)
+        carry = 0 if baseline else min(MAX_CARRY_PAGES, int(self.db.get("listing_fast_carry", "0") or 0))
+        min_pages = max(self.cfg.listing_fast_pages_min, carry + 1)
+        max_pages = max(min_pages, self.cfg.listing_fast_pages_max + carry)
+        page, pages, new = 1, 1, 0
+        while page <= min(pages, max_pages):
+            body = self.listing.search_page(ITALY, today, page)
+            res.requests += 1
+            pages = int(body.get("tot_pagine") or 0)
+            new = self._handle_page(body.get("results") or [], st, baseline, installed, res)
+            if not baseline and page >= min_pages and new == 0:
+                break
+            page += 1
+        still_new = not baseline and page > max_pages and new > 0 and page <= pages
+        self.db.set("listing_fast_carry", str(max_pages if still_new else 0))
+        if baseline:
+            self.db.set("listing_done_italia", today.isoformat())
+            self.db.set("listing_watermark_id", str(res.max_id))
+        res.structures.append(ITALY)
+
+    def _full_rotation(self, today: date, installed: str, res: ListingResult) -> None:
+        """Lettura completa di una struttura a rotazione (rete di sicurezza, spenta di default:
+        una struttura sono 30-60 richieste). Un turno ogni LISTING_FULL_EVERY_RUNS giri."""
+        tick = int(self.db.get("listing_full_tick", "0") or 0)
+        self.db.set("listing_full_tick", str(tick + 1))
+        if tick % self.cfg.listing_full_every_runs != 0:
+            return
+        structures = self.structures(today)
+        for st in self._next_full(structures):
+            baseline = self.db.get(f"listing_done_{st.code}") is None
+            records = list(self.listing.iter_structure(st.code, today))
+            res.requests += max(1, (len(records) + 4) // 5)
+            if getattr(self.listing, "last_total_records", 0) >= MAX_RESULTS:
+                raise ListingError(f"la struttura {st.code} supera i {MAX_RESULTS} risultati: "
+                                   "l'elenco sarebbe incompleto, serve dividere la ricerca")
+            self._handle_page(records, st, baseline, installed, res)
+            self.db.set(f"listing_done_{st.code}", today.isoformat())
+            self._advance_full(structures)
+            res.full.append(st.code)

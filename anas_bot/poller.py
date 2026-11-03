@@ -19,10 +19,12 @@ import time
 from dataclasses import dataclass
 from typing import Callable, Protocol
 
-from .anas.client import TransientError
+from .anas.client import BlockedError, TransientError
 from .anas.parser import Ordinanza, parse_ordinanza
 from .config import Config
 from .db import Database
+
+BLOCKED_UNTIL = "anas_blocked_until"  # stessa chiave di listing_poller: pausa dopo un blocco del firewall
 
 log = logging.getLogger(__name__)
 
@@ -161,6 +163,11 @@ class Poller:
             # 3) niente di nuovo da un po'? assaggio più avanti, nel caso di un buco lungo
             if misses and self._lookahead_due() and res.requests < budget:
                 res.requests += self._lookahead(res)
+        except BlockedError as exc:
+            # quarantena del firewall: nessuna richiesta per un po', e niente "arretrato" nello stesso giro
+            self.db.set(BLOCKED_UNTIL, str(time.time() + self.cfg.block_pause_minutes * 60))
+            res.error, res.more_pending = str(exc), False
+            log.warning("Canale a numeri: %s. Nessuna richiesta ad ANAS per %d minuti", exc, self.cfg.block_pause_minutes)
         except TransientError as exc:
             res.error = str(exc)
             log.warning("ANAS non raggiungibile, riprovo al prossimo ciclo: %s", exc)

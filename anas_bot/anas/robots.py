@@ -26,19 +26,20 @@ ROBOTS_PATH = "/robots.txt"
 class RobotsPolicy:
     """Decide se un URL è interrogabile secondo il robots.txt, per uno User-Agent dato."""
 
-    def __init__(self, parser: RobotFileParser, user_agent: str) -> None:
+    def __init__(self, parser: RobotFileParser, user_agent: str, text: str | None = None) -> None:
         self._p = parser
         self.ua = user_agent
+        self.text = text  # il robots.txt letto dal sito (None se la policy non viene dal sito)
 
     @classmethod
-    def _build(cls, lines: list[str], user_agent: str) -> "RobotsPolicy":
+    def _build(cls, lines: list[str], user_agent: str, text: str | None = None) -> "RobotsPolicy":
         p = RobotFileParser()
         p.parse(lines)
-        return cls(p, user_agent)
+        return cls(p, user_agent, text)
 
     @classmethod
     def from_text(cls, text: str, user_agent: str) -> "RobotsPolicy":
-        return cls._build((text or "").splitlines(), user_agent)
+        return cls._build((text or "").splitlines(), user_agent, text or "")
 
     @classmethod
     def allow_all(cls, user_agent: str) -> "RobotsPolicy":

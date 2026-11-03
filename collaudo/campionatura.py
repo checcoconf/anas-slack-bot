@@ -65,7 +65,7 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
 
     client = AnasClient(os.environ.get("ANAS_PDF_URL", DEFAULT_URL),
-                        os.environ.get("ANAS_USER_AGENT", "WazeItaliaAnasBot/1.0 (campionatura)"),
+                        os.environ.get("ANAS_USER_AGENT", "WazeItaliaAnasBot"),
                         delay_seconds=args.delay)
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
