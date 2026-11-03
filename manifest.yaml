@@ -1,0 +1,45 @@
+# Manifest dell'app Slack.
+# 1. Sostituisci TUO-SOTTODOMINIO con il tuo sottodominio workers.dev (Cloudflare -> Workers e Pages),
+#    es. https://anas-slack-bot.mario-rossi.workers.dev
+# 2. Su https://api.slack.com/apps -> Create New App -> From a manifest, incolla e crea
+#    (per un'app esistente: la tua app -> "App Manifest", incolla e salva).
+display_information:
+  name: ANAS Chiusure
+  description: Chiusure e limiti di velocità dalle ordinanze ANAS, per gli editor Waze Italia
+  background_color: "#1f3a5f"
+features:
+  app_home:
+    home_tab_enabled: true
+    messages_tab_enabled: true
+    messages_tab_read_only_enabled: true
+  bot_user:
+    display_name: anas-chiusure
+    always_online: true
+  slash_commands:
+    - command: /anas
+      url: https://anas-slack-bot..workers.dev/slack/commands
+      description: Avvisi chiusure ANAS per Waze — zone, stato, pausa
+      usage_hint: "[stato | pausa | riprendi | aiuto]"
+      should_escape: false
+oauth_config:
+  scopes:
+    bot:
+      - chat:write          # mandare i messaggi privati
+      - im:write            # aprire la conversazione privata con un utente
+      - channels:read       # elenco membri di un canale pubblico
+      - groups:read         # elenco membri di un canale privato
+      - users:read          # distinguere persone e bot
+      - commands            # comando /anas
+settings:
+  event_subscriptions:
+    request_url: https://anas-slack-bot.francesco-conforti03.workers.dev/slack/events
+    bot_events:
+      - member_joined_channel
+      - member_left_channel
+      - app_home_opened
+  interactivity:
+    is_enabled: true
+    request_url: https://anas-slack-bot.francesco-conforti03.workers.dev/slack/interactivity
+  org_deploy_enabled: false
+  socket_mode_enabled: false
+  token_rotation_enabled: false

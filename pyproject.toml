@@ -1,0 +1,17 @@
+[project]
+name = "anas-slack-bot"
+version = "1.0.0"
+description = "Bot Slack per Waze Italia: chiusure e limiti di velocità dalle ordinanze ANAS"
+requires-python = ">=3.12"
+dependencies = [
+    "slack-sdk==3.46.0",
+    "requests==2.34.2",
+    "pypdf==6.21.4",
+    "tzdata>=2025.2",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

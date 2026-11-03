@@ -1,0 +1,55 @@
+# Il lavoro periodico: scarica le ordinanze ANAS nuove, le classifica e manda i messaggi privati.
+# Lo avvia il Cloudflare Worker ogni 15 minuti (workflow_dispatch). La pianificazione qui sotto
+# è solo una riserva: GitHub la sospende dopo 60 giorni senza commit sulle repo pubbliche.
+name: ANAS ordinanze
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "41 */3 * * *"
+
+# mai due giri in parallelo sullo stesso database
+concurrency:
+  group: anas-job
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  run:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Giro ANAS -> Slack
+        run: python -m anas_bot.job
+        env:
+          # Secrets (Settings -> Secrets and variables -> Actions -> Secrets)
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+          CF_D1_DATABASE_ID: ${{ secrets.CF_D1_DATABASE_ID }}
+          # Variables (stessa pagina -> Variables)
+          SLACK_CHANNEL_IDS: ${{ vars.SLACK_CHANNEL_IDS }}
+          ADMIN_CHANNEL_ID: ${{ vars.ADMIN_CHANNEL_ID }}
+          ANAS_START_ID: ${{ vars.ANAS_START_ID }}
+          ANAS_USER_AGENT: ${{ vars.ANAS_USER_AGENT }}
+          WELCOME_EXISTING_MEMBERS: ${{ vars.WELCOME_EXISTING_MEMBERS }}
+          UNKNOWN_PROVINCE_FALLBACK: ${{ vars.UNKNOWN_PROVINCE_FALLBACK }}
+          # Facoltative: se non le crei valgono i default (vedi README, "Buono a sapersi")
+          LISTING_FAST_PAGES_MIN: ${{ vars.LISTING_FAST_PAGES_MIN }}
+          LISTING_FAST_PAGES_MAX: ${{ vars.LISTING_FAST_PAGES_MAX }}
+          LISTING_FULL_PER_RUN: ${{ vars.LISTING_FULL_PER_RUN }}
+          WALK_ALWAYS: ${{ vars.WALK_ALWAYS }}
+          ANAS_ROUTE: ${{ vars.ANAS_ROUTE }}
+          LISTING_FULL_EVERY_RUNS: ${{ vars.LISTING_FULL_EVERY_RUNS }}
+          REQUEST_DELAY_SECONDS: ${{ vars.REQUEST_DELAY_SECONDS }}
+          # codice concordato con ANAS per l'eccezione nel loro firewall (se ve lo danno)
+          ANAS_BOT_KEY: ${{ secrets.ANAS_BOT_KEY }}
+          WORKER_URL: ${{ vars.WORKER_URL }}

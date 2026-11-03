@@ -1,0 +1,33 @@
+// Configurazione del Cloudflare Worker (piano gratuito).
+// Non serve modificare questo file: lo pubblica il workflow GitHub "Pubblica Worker",
+// che inserisce l'ID del database, il canale Slack e i segreti presi da Secrets/Variables di GitHub.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "anas-slack-bot",
+  "main": "src/index.js",
+  "compatibility_date": "2026-10-01",
+  "observability": { "enabled": true },
+
+  // Database condiviso con GitHub Actions (creato dal pannello Cloudflare: D1 -> Create, nome "anas-bot").
+  // Il segnaposto qui sotto viene sostituito dal workflow con il secret CF_D1_DATABASE_ID.
+  "d1_databases": [
+    { "binding": "DB", "database_name": "anas-bot", "database_id": "INCOLLA-QUI-IL-DATABASE-ID" }
+  ],
+
+  // Il Worker gira vicino a Milano (AWS eu-south-1): così il "ponte" verso il sito ANAS (src/relay.js)
+  // si collega da un indirizzo europeo. I server di GitHub, negli Stati Uniti, ANAS non li accetta.
+  "placement": { "region": "aws:eu-south-1" },
+
+  // Ogni 15 minuti il Worker avvia il workflow di GitHub che scarica le ordinanze (orari in UTC).
+  "triggers": { "crons": ["*/15 * * * *"] },
+
+  // Valori di riserva: il workflow li sovrascrive con la variable SLACK_CHANNEL_IDS e il nome della repo.
+  "vars": {
+    "SLACK_CHANNEL_IDS": "C0123ABCD",
+    "GITHUB_REPO": "tuo-utente/anas-slack-bot",
+    "GITHUB_WORKFLOW": "anas.yml",
+    "GITHUB_REF": "main"
+  }
+  // Segreti caricati dal workflow (da GitHub Secrets):
+  //   SLACK_BOT_TOKEN, SLACK_SIGNING_SECRET, GITHUB_TOKEN (= secret WORKER_GITHUB_TOKEN)
+}

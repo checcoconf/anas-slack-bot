@@ -1,0 +1,14 @@
+{
+  "name": "anas-slack-bot-worker",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev",
+    "db:init": "wrangler d1 execute anas-bot --remote --file=../anas_bot/schema.sql",
+    "test": "node --test --no-warnings \"test/**/*.test.js\""
+  },
+  "devDependencies": {
+    "wrangler": "^4.156.0"
+  }
+}

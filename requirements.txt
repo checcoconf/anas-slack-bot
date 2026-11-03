@@ -1,0 +1,5 @@
+# Versioni stabili al 1° novembre 2026, bloccate per avere build ripetibili.
+slack-sdk==3.46.0
+requests==2.34.2
+pypdf==6.21.4
+tzdata>=2025.2

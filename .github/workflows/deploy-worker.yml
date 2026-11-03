@@ -1,0 +1,86 @@
+# Pubblica il Cloudflare Worker e prepara il database D1, tutto da GitHub: sul tuo PC non serve nulla.
+# Parte da solo quando cambia il codice del Worker, oppure a mano: Actions -> "Pubblica Worker" -> Run workflow.
+# Usa gli stessi Secrets e Variables del bot (vedi README, sezione Installazione).
+name: Pubblica Worker
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "worker/**"
+      - "anas_bot/schema.sql"
+      - ".github/workflows/deploy-worker.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-worker
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: worker
+    env:
+      # nomi che Wrangler (lo strumento ufficiale di Cloudflare) legge da solo
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+      WRANGLER_SEND_METRICS: "false"
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: worker/package-lock.json
+
+      - name: Controllo dei Secrets e delle Variables
+        env:
+          CF_D1_DATABASE_ID: ${{ secrets.CF_D1_DATABASE_ID }}
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          SLACK_SIGNING_SECRET: ${{ secrets.SLACK_SIGNING_SECRET }}
+          WORKER_GITHUB_TOKEN: ${{ secrets.WORKER_GITHUB_TOKEN }}
+          SLACK_CHANNEL_IDS: ${{ vars.SLACK_CHANNEL_IDS }}
+        run: |
+          ok=1
+          for s in CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID CF_D1_DATABASE_ID SLACK_BOT_TOKEN SLACK_SIGNING_SECRET WORKER_GITHUB_TOKEN; do
+            [ -n "${!s}" ] || { n="$s"; [ "$s" = CLOUDFLARE_API_TOKEN ] && n=CF_API_TOKEN; [ "$s" = CLOUDFLARE_ACCOUNT_ID ] && n=CF_ACCOUNT_ID
+                               echo "::error::Manca il secret $n (Settings -> Secrets and variables -> Actions -> Secrets)"; ok=0; }
+          done
+          [ -n "$SLACK_CHANNEL_IDS" ] || { echo "::error::Manca la variable SLACK_CHANNEL_IDS (stessa pagina, scheda Variables)"; ok=0; }
+          case "$SLACK_BOT_TOKEN" in xoxb-*|"") ;; *) echo "::error::SLACK_BOT_TOKEN deve iniziare con xoxb-"; ok=0;; esac
+          [ "$ok" = 1 ] || exit 1
+          # l'ID del database va nel file di configurazione del Worker (non viene stampato nei log)
+          sed -i "s/INCOLLA-QUI-IL-DATABASE-ID/${CF_D1_DATABASE_ID}/" wrangler.jsonc
+
+      - name: Installa Wrangler (versione bloccata in package-lock.json)
+        run: npm ci --no-audit --no-fund
+
+      - name: Test del Worker
+        run: npm test
+
+      - name: Crea le tabelle del database (se mancano)
+        run: npx wrangler d1 execute anas-bot --remote --file=../anas_bot/schema.sql --yes
+
+      - name: Pubblica il Worker
+        run: >
+          npx wrangler deploy
+          --var "SLACK_CHANNEL_IDS:${{ vars.SLACK_CHANNEL_IDS }}"
+          --var "GITHUB_REPO:${{ github.repository }}"
+          --var "GITHUB_REF:${{ github.event.repository.default_branch || 'main' }}"
+
+      - name: Carica i segreti nel Worker
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          SLACK_SIGNING_SECRET: ${{ secrets.SLACK_SIGNING_SECRET }}
+          # token GitHub con cui il Worker avvia il giro ogni 15 minuti (GitHub vieta nomi che iniziano con GITHUB_)
+          WORKER_GITHUB_TOKEN: ${{ secrets.WORKER_GITHUB_TOKEN }}
+        run: |
+          jq -n '{SLACK_BOT_TOKEN: env.SLACK_BOT_TOKEN, SLACK_SIGNING_SECRET: env.SLACK_SIGNING_SECRET,
+                  GITHUB_TOKEN: env.WORKER_GITHUB_TOKEN}' | npx wrangler secret bulk
