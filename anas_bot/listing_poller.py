@@ -11,6 +11,8 @@ in 90 minuti da un altro). Per questo ogni giro fa pochissime richieste, distanz
    finché il tempo (JOB_TIME_BUDGET_MINUTES) finisce; il giro dopo riparte dalla prima non letta.
    Si ferma appena una pagina non contiene niente di nuovo; se era ancora tutta nuova, al giro dopo
    quella struttura parte con una pagina in più. I messaggi Slack partono dopo ogni struttura.
+   Di notte (LISTING_DEEP_HOURS) legge LISTING_DEEP_PAGES pagine per struttura, allo stesso ritmo:
+   il sito ordina per inizio validità, e un'ordinanza nuova può stare in 2ª-4ª pagina.
 2. PDF: al massimo MAX_PDF_PER_RUN per giro (proroghe, revoche, province delle chiusure);
    le ordinanze che ne hanno bisogno oltre il tetto restano "nuove" e slittano al giro dopo.
 3. BLOCCO: alla prima pagina di blocco del firewall il giro si ferma e il bot non fa richieste
@@ -227,11 +229,16 @@ class ListingPoller:
         return Structure(code or ITALY, rec.get("COMPARTIMENTO") or "Italia")
 
     # --- il giro --------------------------------------------------------------------
-    def run(self, today: date, deadline: float | None = None, now: float | None = None) -> ListingResult:
+    def run(self, today: date, deadline: float | None = None, now: float | None = None,
+            hour: int | None = None) -> ListingResult:
         """deadline: time.monotonic() oltre il quale non si iniziano altre letture (il resto al giro dopo).
-        now: time.time() (sostituibile nei test) per la pausa dopo un blocco del firewall."""
+        now: time.time() (sostituibile nei test) per la pausa dopo un blocco del firewall.
+        hour: ora locale (0-23) per decidere se è il momento della lettura profonda; None = mai."""
         res = ListingResult()
         now = time.time() if now is None else now
+        self.deep = hour is not None and self.cfg.is_deep_hour(hour)
+        if self.deep:
+            log.info("Elenco: lettura profonda notturna, %d pagine per struttura", self.cfg.listing_deep_pages)
         late = lambda: deadline is not None and time.monotonic() > deadline  # noqa: E731
         installed = self.db.get("installed_on")
         if not installed:
@@ -297,6 +304,8 @@ class ListingPoller:
         carry_key = f"listing_fast_carry_{st.code}"
         carry = 0 if baseline else min(MAX_CARRY_PAGES, int(self.db.get(carry_key, "0") or 0))
         min_pages = max(self.cfg.listing_fast_pages_min, carry + 1)
+        if getattr(self, "deep", False):
+            min_pages = max(min_pages, self.cfg.listing_deep_pages)
         max_pages = max(min_pages, self.cfg.listing_fast_pages_max + carry)
         page, pages, new, max_id = 1, 1, 0, 0
         while page <= min(pages, max_pages):

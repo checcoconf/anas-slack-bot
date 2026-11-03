@@ -68,6 +68,10 @@ class Config:
     listing_structures_per_run: int = 23  # strutture lette per giro: tutte, è il tempo (budget) a fermare il giro
     listing_fast_pages_min: int = 1  # pagine lette sempre
     listing_fast_pages_max: int = 2  # ...e massime, se continuano a comparire ordinanze nuove
+    # Lettura profonda di notte (ANAS non pubblica, il ritmo resta lo stesso): più pagine per struttura,
+    # per le ordinanze che il sito non mette in prima pagina (ordina per inizio validità, non per pubblicazione).
+    listing_deep_pages: int = 4  # pagine lette sempre, per struttura, nelle ore "profonde"
+    listing_deep_hours: str = "0-6"  # ore locali (da-a, estremo finale escluso); vuoto = mai
     # Lettura completa a rotazione (una struttura per intero): spenta, costa decine di richieste.
     listing_full_per_run: int = 0  # strutture rilette per intero a ogni turno (0 = mai)
     listing_full_every_runs: int = 4  # un turno di lettura completa ogni N giri
@@ -76,6 +80,14 @@ class Config:
 
     welcome_existing_members: bool = True
     unknown_province_fallback: bool = True
+
+    def is_deep_hour(self, hour: int) -> bool:
+        """True se l'ora locale (0-23) cade nella fascia della lettura profonda, es. "0-6" oppure "22-6"."""
+        try:
+            a, b = (int(x) for x in self.listing_deep_hours.split("-"))
+        except ValueError:
+            return False
+        return a <= hour < b if a <= b else (hour >= a or hour < b)
 
     @property
     def uses_d1(self) -> bool:
@@ -111,6 +123,8 @@ class Config:
         c.listing_structures_per_run = max(1, _int("LISTING_STRUCTURES_PER_RUN", c.listing_structures_per_run))
         c.listing_fast_pages_min = _int("LISTING_FAST_PAGES_MIN", c.listing_fast_pages_min)
         c.listing_fast_pages_max = _int("LISTING_FAST_PAGES_MAX", c.listing_fast_pages_max)
+        c.listing_deep_pages = _int("LISTING_DEEP_PAGES", c.listing_deep_pages)
+        c.listing_deep_hours = os.environ.get("LISTING_DEEP_HOURS", c.listing_deep_hours).strip()
         c.walk_always = _bool("WALK_ALWAYS", c.walk_always)
         c.job_time_budget_minutes = _int("JOB_TIME_BUDGET_MINUTES", c.job_time_budget_minutes)
         c.welcome_existing_members = _bool("WELCOME_EXISTING_MEMBERS", c.welcome_existing_members)

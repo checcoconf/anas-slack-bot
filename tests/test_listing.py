@@ -436,3 +436,30 @@ def test_messages_are_flushed_after_each_structure(env):
     p.after_structure = lambda: calls.append(len(listing.calls))
     p.run(date(2026, 11, 2))
     assert len(calls) == 2  # una chiamata per struttura letta (BA, MI)
+
+
+def test_night_deep_read_finds_new_closure_below_first_page(env):
+    """Di notte si leggono 4 pagine per struttura: un'ordinanza nuova a pagina 3 arriva la mattina dopo."""
+    cfg, db, listing, src = env
+    p = ListingPoller(db, listing, src, cfg)
+    _install(p, listing)
+    listing.pages["BA"].insert(12, _closure(212500, "03/11/2026"))   # in terza pagina, sotto 12 note
+    listing.calls.clear()
+    assert p.run(date(2026, 11, 2), hour=14).new == 0              # di giorno: prima pagina, niente di nuovo
+    assert [c[1] for c in listing.calls if c[0] == "BA"] == [1]
+    listing.calls.clear()
+    r = p.run(date(2026, 11, 3), hour=3)                           # di notte: 4 pagine
+    assert r.relevant == 1 and [o.ord_id for o in db.pending_ordinanze()] == [212500]
+    assert r.silent == r.new - 1                                   # le vecchie sotto lo spartiacque: mute
+    assert [c[1] for c in listing.calls if c[0] == "BA"] == [1, 2, 3, 4]
+    assert db.get("listing_fast_carry_BA") == "0"                  # la profondità notturna non lascia "carry"
+
+
+def test_deep_hours_parsing():
+    cfg = Config()
+    cfg.listing_deep_hours = "0-6"
+    assert cfg.is_deep_hour(0) and cfg.is_deep_hour(5) and not cfg.is_deep_hour(6) and not cfg.is_deep_hour(14)
+    cfg.listing_deep_hours = "22-6"
+    assert cfg.is_deep_hour(23) and cfg.is_deep_hour(2) and not cfg.is_deep_hour(12)
+    cfg.listing_deep_hours = ""
+    assert not cfg.is_deep_hour(3)

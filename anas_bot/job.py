@@ -62,7 +62,8 @@ def admin(client, cfg: Config, text: str) -> None:
 def run(cfg: Config, db: Database, client, source, listing=None) -> int:
     started = time.monotonic()
     budget = cfg.job_time_budget_minutes * 60
-    today = datetime.now(ZoneInfo(cfg.timezone)).date()
+    local_now = datetime.now(ZoneInfo(cfg.timezone))
+    today = local_now.date()
 
     first_ever = db.get("reconciled_once") is None
     welcomed, left = Membership(db, client, cfg).reconcile(first_run=first_ever)
@@ -83,7 +84,7 @@ def run(cfg: Config, db: Database, client, source, listing=None) -> int:
             users += nres.users_notified
         poller = ListingPoller(db, listing, source, cfg)
         poller.after_structure = flush
-        lres = poller.run(today, deadline=started + budget)
+        lres = poller.run(today, deadline=started + budget, hour=local_now.hour)
         flush()
         fetched, relevant = lres.new, lres.relevant
         log.info("Elenco ufficiale: %d richieste all'elenco (%d in tutto ad ANAS), %d ordinanze viste, %d nuove "
