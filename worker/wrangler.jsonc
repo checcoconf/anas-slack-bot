@@ -18,10 +18,9 @@
   // si collega da un indirizzo europeo. I server di GitHub, negli Stati Uniti, ANAS non li accetta.
   "placement": { "region": "aws:eu-south-1" },
 
-  // Il Worker avvia il workflow di GitHub che scarica le ordinanze (orari in UTC):
-  // ogni 30 minuti dalle 7 alle 20 UTC (8-21 italiane), una volta l'ora di notte. ANAS pubblica
-  // in orario d'ufficio: di notte il giro troverebbe quasi sempre zero novità.
-  "triggers": { "crons": ["*/30 7-20 * * *", "0 21-23,0-6 * * *"] },
+  // Una volta l'ora il Worker avvia il workflow di GitHub che legge le ordinanze: il giro dura quasi
+  // un'ora e fa una richiesta ad ANAS ogni ~2,5 minuti (vedi JOB_TIME_BUDGET_MINUTES e REQUEST_DELAY_SECONDS).
+  "triggers": { "crons": ["0 * * * *"] },
 
   // Valori di riserva: il workflow li sovrascrive con la variable SLACK_CHANNEL_IDS e il nome della repo.
   "vars": {

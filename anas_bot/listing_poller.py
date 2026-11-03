@@ -1,13 +1,16 @@
 """Giro sull'elenco ufficiale di Ordinanze Web: la fonte principale delle ordinanze.
 
-Il sito elenca le ordinanze dalla più recente (collaudo del 02/11/2026, 3.718 ordinanze reali)
-e il suo firewall mette in quarantena chi fa più di una manciata di richieste in poco tempo
-(collaudo del 03/11/2026: bloccati alla 9ª richiesta in 27 secondi). Per questo ogni giro fa
-pochissime richieste, distanziate:
+Il sito elenca le ordinanze dalla più recente (collaudo del 02/11/2026, 3.718 ordinanze reali),
+si rifiuta di elencarne più di 1.000 per ricerca (quindi niente ricerca "tutta Italia": 3.911 in
+vigore il 03/11/2026) e il suo firewall mette in quarantena chi fa più di una manciata di richieste
+(collaudo del 03/11/2026: bloccati dopo 9 richieste in 27 secondi da un indirizzo, e dopo 6 richieste
+in 90 minuti da un altro). Per questo ogni giro fa pochissime richieste, distanziate:
 
-1. LETTURA VELOCE "TUTTA ITALIA": una sola ricerca senza struttura (area "*"), ordinata dalla
-   più recente, 1-2 pagine da 5. Si ferma appena una pagina non contiene niente di nuovo.
-   Se l'ultima pagina letta era ancora tutta nuova, al giro dopo legge una pagina in più.
+1. LETTURA VELOCE A ROTAZIONE: il giro dura quasi un'ora e fa una richiesta ogni ~2,5 minuti
+   (REQUEST_DELAY_SECONDS): struttura dopo struttura, 1-2 pagine da 5 ciascuna, dalla più recente,
+   finché il tempo (JOB_TIME_BUDGET_MINUTES) finisce; il giro dopo riparte dalla prima non letta.
+   Si ferma appena una pagina non contiene niente di nuovo; se era ancora tutta nuova, al giro dopo
+   quella struttura parte con una pagina in più. I messaggi Slack partono dopo ogni struttura.
 2. PDF: al massimo MAX_PDF_PER_RUN per giro (proroghe, revoche, province delle chiusure);
    le ordinanze che ne hanno bisogno oltre il tetto restano "nuove" e slittano al giro dopo.
 3. BLOCCO: alla prima pagina di blocco del firewall il giro si ferma e il bot non fa richieste
@@ -15,8 +18,9 @@ pochissime richieste, distanziate:
 4. LETTURA COMPLETA a rotazione (una struttura per intero): disponibile ma spenta
    (LISTING_FULL_PER_RUN=0), costa decine di richieste.
 
-Niente ordinanze vecchie: al primo giro le ordinanze trovate vengono solo segnate come viste,
-tranne quelle che iniziano dal giorno di installazione in poi.
+Niente ordinanze vecchie: alla prima lettura di una struttura le ordinanze trovate vengono solo
+segnate come viste (e si fissa l'ID "spartiacque": sotto è tutto vecchio), tranne quelle che
+iniziano dal giorno di installazione in poi.
 
 Proroghe e revoche non hanno riepilogo nell'elenco: si legge il PDF e, se cita un'ordinanza
 già vista dal bot, ne eredita strada, km e tipo (una proroga di una chiusura resta una chiusura).
@@ -84,6 +88,7 @@ class ListingPoller:
         self.source = source  # PdfSource: per proroghe/revoche e per trovare le province
         self.cfg = cfg
         self.pdf_budget = cfg.max_pdf_per_run  # PDF ancora scaricabili in questo giro
+        self.after_structure = None  # callback senza argomenti: il job manda i messaggi in coda (giro lungo)
         self.watermark = 0  # ID più alto visto al primo giro: sotto è "già in vigore prima del bot"
 
     def _fetch_text(self, ord_id: int) -> str | None:
@@ -243,7 +248,7 @@ class ListingPoller:
 
         self.pdf_budget = self.cfg.max_pdf_per_run
         try:
-            self._fast_italy(today, installed, res)
+            self._fast_structures(today, installed, res, late)
             if self.cfg.listing_full_per_run > 0 and not late():
                 self._full_rotation(today, installed, res)
         except BlockedError as exc:
@@ -263,34 +268,57 @@ class ListingPoller:
             self.db.set("anas_cursor", str(res.max_id))
         return res
 
-    def _fast_italy(self, today: date, installed: str, res: ListingResult) -> None:
-        """Lettura veloce: la ricerca "tutta Italia", dalla più recente, poche pagine.
+    def _fast_structures(self, today: date, installed: str, res: ListingResult, late) -> None:
+        """Lettura veloce: LISTING_STRUCTURES_PER_RUN strutture per giro, a rotazione, 1-2 pagine ciascuna.
 
-        Al primo giro (baseline) legge le pagine massime e segna tutto come già visto, senza PDF.
-        Poi si ferma alla prima pagina senza novità. Se l'ultima pagina letta era ancora tutta
-        nuova ("carry"), al giro dopo legge almeno una pagina in più: le ordinanze oltre il
-        limite non vanno perse."""
-        st = Structure(ITALY, "Italia")
-        baseline = self.db.get("listing_done_italia") is None
-        self.watermark = int(self.db.get("listing_watermark_id", "0") or 0)
-        carry = 0 if baseline else min(MAX_CARRY_PAGES, int(self.db.get("listing_fast_carry", "0") or 0))
+        Per ogni struttura, alla prima lettura (baseline) legge le pagine massime, segna tutto come già
+        visto senza PDF e fissa uno "spartiacque" (ID più alto visto): sotto quello è tutto vecchio.
+        Poi si ferma alla prima pagina senza novità. Se l'ultima pagina letta era ancora tutta nuova
+        ("carry"), al giro dopo quella struttura parte con una pagina in più."""
+        structures = self.structures(today)  # dal menu/elenco noto, in cache per una settimana
+        n = len(structures)
+        off = int(self.db.get("listing_fast_rr", "0") or 0) % n
+        k = min(self.cfg.listing_structures_per_run, n)
+        done = 0
+        for st in [structures[(off + i) % n] for i in range(k)]:
+            if late():
+                log.info("Elenco: tempo del giro finito, %s e seguenti al prossimo giro", st.code)
+                break
+            self._fast_structure(st, today, installed, res)
+            done += 1
+            if self.after_structure:
+                self.after_structure()  # i messaggi partono subito, non alla fine dell'ora
+        self.db.set("listing_fast_rr", str((off + done) % n))
+
+    def _fast_structure(self, st: Structure, today: date, installed: str, res: ListingResult) -> None:
+        self.watermark = int(self.db.get(f"listing_watermark_{st.code}", "0") or 0)
+        # prima lettura di questa struttura: presa visione (rifatta finché non vede davvero qualcosa)
+        baseline = self.db.get(f"listing_done_{st.code}") is None
+        carry_key = f"listing_fast_carry_{st.code}"
+        carry = 0 if baseline else min(MAX_CARRY_PAGES, int(self.db.get(carry_key, "0") or 0))
         min_pages = max(self.cfg.listing_fast_pages_min, carry + 1)
         max_pages = max(min_pages, self.cfg.listing_fast_pages_max + carry)
-        page, pages, new = 1, 1, 0
+        page, pages, new, max_id = 1, 1, 0, 0
         while page <= min(pages, max_pages):
-            body = self.listing.search_page(ITALY, today, page)
+            body = self.listing.search_page(st.code, today, page)
             res.requests += 1
             pages = int(body.get("tot_pagine") or 0)
-            new = self._handle_page(body.get("results") or [], st, baseline, installed, res)
+            results = body.get("results") or []
+            if page == 1 and not results and int(body.get("tot_record") or 0) > 0:
+                raise ListingError(f"la ricerca {st.code} dichiara {body.get('tot_record')} ordinanze ma non le "
+                                   f"elenca: {body.get('messaggio') or 'formato cambiato'}")
+            ids = [int(r["ID"]) for r in results if str(r.get("ID", "")).isdigit()]
+            max_id = max([max_id, *ids])
+            new = self._handle_page(results, st, baseline, installed, res)
             if not baseline and page >= min_pages and new == 0:
                 break
             page += 1
         still_new = not baseline and page > max_pages and new > 0 and page <= pages
-        self.db.set("listing_fast_carry", str(max_pages if still_new else 0))
-        if baseline:
-            self.db.set("listing_done_italia", today.isoformat())
-            self.db.set("listing_watermark_id", str(res.max_id))
-        res.structures.append(ITALY)
+        self.db.set(carry_key, str(max_pages if still_new else 0))
+        if baseline and max_id > 0:
+            self.db.set(f"listing_done_{st.code}", today.isoformat())
+            self.db.set(f"listing_watermark_{st.code}", str(max_id))
+        res.structures.append(st.code)
 
     def _full_rotation(self, today: date, installed: str, res: ListingResult) -> None:
         """Lettura completa di una struttura a rotazione (rete di sicurezza, spenta di default:
@@ -302,6 +330,7 @@ class ListingPoller:
         structures = self.structures(today)
         for st in self._next_full(structures):
             baseline = self.db.get(f"listing_done_{st.code}") is None
+            self.watermark = int(self.db.get(f"listing_watermark_{st.code}", "0") or 0)
             records = list(self.listing.iter_structure(st.code, today))
             res.requests += max(1, (len(records) + 4) // 5)
             if getattr(self.listing, "last_total_records", 0) >= MAX_RESULTS:

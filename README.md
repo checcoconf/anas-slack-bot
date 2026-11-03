@@ -17,7 +17,7 @@ Ogni utente sceglie le zone da menu a tendina: 🇮🇹 tutta Italia, 🗺️ re
           Slack  ◄──────────────────────────────────────┐
             │ eventi, pulsanti, modulo                  │ messaggi privati
             ▼                                           │
- ┌─────────────────────────┐   ogni 15 min   ┌──────────┴──────────────┐
+ ┌─────────────────────────┐   ogni ora      ┌──────────┴──────────────┐
  │ Cloudflare Worker       │ ──────────────► │ GitHub Actions (Python) │
  │ (sempre acceso, gratis) │  avvia il job   │ scarica PDF ANAS,       │
  │ benvenuto, menu, Home   │                 │ classifica, invia       │
@@ -29,7 +29,7 @@ Ogni utente sceglie le zone da menu a tendina: 🇮🇹 tutta Italia, 🗺️ re
 - **Cloudflare Worker** (cartella `worker/`, JavaScript). È la parte sempre accesa: risponde a Slack entro i 3 secondi richiesti.
   - Manda il benvenuto a chi entra nel canale.
   - Gestisce il modulo con i menu, la scheda Home e i comandi `/anas` (con sottocomandi: stato, pausa, riprendi, aiuto).
-  - Ogni 15 minuti avvia il job su GitHub.
+  - Una volta l'ora avvia il job su GitHub (che dura quasi un'ora, una richiesta ad ANAS ogni 2-3 minuti).
 - **GitHub Actions** (cartella `anas_bot/`, Python con l'SDK ufficiale `slack_sdk`). Fa il lavoro pesante:
   - legge l'elenco ufficiale di [Ordinanze Web](https://www.stradeanas.it/it/ordinanze-web) e trova le ordinanze nuove;
   - le classifica (scarica il PDF solo quando serve) e manda un messaggio riassuntivo per utente;
@@ -113,11 +113,11 @@ Scheda **Variables** (*New repository variable*):
 3. Su Slack scrivi `/anas` e scegli le zone (per la prima prova: 🇮🇹 Tutta Italia).
 
 ### 9. Primo giro
-1. *Actions → ANAS ordinanze → Run workflow* (oppure aspetta: il Worker lo avvia da solo ogni 15 minuti).
+1. *Actions → ANAS ordinanze → Run workflow* (oppure aspetta: il Worker lo avvia da solo una volta l'ora).
 2. Nel log devono comparire `Elenco ufficiale: 23 strutture, …` e `Fine giro: …`. Nel canale tecnico arriva 🤖 *Bot attivo*.
 3. Esci e rientra nel canale: deve arrivarti il benvenuto 👋.
 
-**Il primo giro è di "presa visione".** Il bot legge le prime pagine dell'elenco e segna come già viste le ordinanze trovate, **senza mandarle**; tutto ciò che sta più in basso (le circa 4.000 ordinanze già in vigore) è considerato vecchio. Fanno eccezione quelle che iniziano dal giorno dell'installazione in poi: quelle sono novità per la mappa e arrivano subito. Le ordinanze pubblicate dopo l'installazione arrivano sempre, fin dal primo giro.
+**La prima lettura di ogni struttura è di "presa visione".** Il bot legge le prime pagine e segna come già viste le ordinanze trovate, **senza mandarle**; tutto ciò che sta più in basso (le circa 4.000 ordinanze già in vigore) è considerato vecchio. Fanno eccezione quelle che iniziano dal giorno dell'installazione in poi: quelle sono novità per la mappa e arrivano subito. Le ordinanze pubblicate dopo l'installazione arrivano sempre, fin dal primo giro.
 
 ### Dal canale di test a quello vero
 
@@ -138,11 +138,12 @@ Possono cambiare le zone o mettere in pausa dalla scheda **Home** dell'app o con
 - **I log di Actions sono pubblici** su una repo pubblica: il codice non scrive mai ID utente, e i token stanno nei Secrets.
 - **La pianificazione di riserva** nel workflow (ogni 3 ore) viene sospesa da GitHub dopo 60 giorni senza commit. Non è un problema: il giro normale lo avvia il Worker.
 - **Dopo un'interruzione si riparte da dove ci si era fermati**, sia per ANAS sia per Slack: il cursore e la coda stanno in D1. Se l'arretrato è grande, il job prosegue nello stesso giro finché ha tempo.
-- **Come trova le ordinanze nuove, con pochissime richieste.** Il firewall di ANAS (FortiWeb) mette in quarantena per un po' chi fa più di una manciata di richieste in poco tempo (collaudo del 03/11/2026: bloccati alla 9ª richiesta in 27 secondi, qualunque sia l'indirizzo di partenza). Per questo ogni giro, cioè ogni 15 minuti, il bot fa **al massimo 6-7 richieste**, distanziate di 15 secondi:
-  - **una sola ricerca "tutta Italia"** (senza scegliere la struttura), che il sito ordina dalla più recente: 1-2 pagine da 5 ordinanze. Si ferma appena una pagina non contiene niente di nuovo; se erano tutte nuove, al giro dopo legge una pagina in più;
-  - **al massimo 3 PDF** per giro (proroghe, revoche, province delle chiusure): le altre ordinanze che ne hanno bisogno slittano al giro dopo;
+- **Come trova le ordinanze nuove senza farsi bloccare.** Il firewall di ANAS (FortiWeb) mette in quarantena (circa 10 minuti) chi fa troppe richieste in poco tempo (collaudo del 03/11/2026: 9 in 27 secondi da un indirizzo, 6 in 90 minuti da un altro); e la ricerca "tutta Italia" non esiste, il sito si rifiuta di elencare più di 1.000 risultati. Per questo il giro è **lungo e lento**: parte una volta l'ora, dura circa 50 minuti e fa **una richiesta ogni 2-3 minuti** (`REQUEST_DELAY_SECONDS`, default 150), qualunque sia: circa 20 richieste all'ora, mai raffiche.
+  - legge le 23 strutture una dopo l'altra, a rotazione: per ciascuna la prima pagina (5 ordinanze, dalla più recente) e la seconda solo se la prima era tutta nuova; se anche la seconda lo era, al giro dopo quella struttura parte con una pagina in più. Quando il tempo finisce, il giro dopo riparte dalla prima struttura non letta;
+  - i messaggi Slack partono subito dopo ogni struttura, non alla fine dell'ora;
+  - al massimo 4 PDF per giro (`MAX_PDF_PER_RUN`): le altre ordinanze che ne hanno bisogno slittano al giro dopo;
   - robots.txt letto una volta al giorno.
-  Un'ordinanza nuova arriva quindi entro 15-20 minuti, qualunque numero e struttura abbia. La vecchia lettura completa di una struttura alla volta (30-60 richieste) è spenta: `LISTING_FULL_PER_RUN=1` per riaccenderla.
+  Un'ordinanza nuova arriva quindi entro un ciclo delle 23 strutture, cioè **1-2 ore**. La vecchia lettura completa di una struttura alla volta (30-60 richieste) è spenta: `LISTING_FULL_PER_RUN=1` per riaccenderla.
 - **Se il firewall blocca lo stesso**, il bot riconosce la pagina "Web Page Blocked" e **si ferma subito**: nessun nuovo tentativo, nessun canale di riserva, e per un'ora (`BLOCK_PAUSE_MINUTES`) nessuna richiesta ad ANAS. Insistere durante la quarantena la allunga; un blocco non "alimentato" scade da solo. Arriva un avviso 🧱 nel canale admin. Vale anche per `collaudo/elenco.py`, che ora va a 15 secondi per richiesta e si ferma al primo blocco.
 - **Come classifica.** Usa il riepilogo strutturato dell'elenco (tratta, corsie, provvedimenti, destinatari, date). Le regole sono state scritte sul vocabolario reale di ANAS: 77 tipi di provvedimento, raccolti in `anas_bot/anas/vocabolario.py`.
   - ⛔ è chiusura: *chiusura al traffico*, *divieto di transito*, *interdizione*, *sospensione della circolazione*, se valgono **per tutti** e su tutta la carreggiata (o su una rampa/svincolo);
@@ -157,7 +158,7 @@ Possono cambiare le zone o mettere in pausa dalla scheda **Home** dell'app o con
   - se l'elenco ufficiale non si legge più per 3 ore, o subito se ha cambiato formato;
   - se una struttura supera i 1.000 risultati (il sito ne mostra al massimo 1.000, quindi l'elenco sarebbe incompleto);
   - se non arrivano ordinanze nuove da 3 giorni.
-- **Impostazioni facoltative** (Variables di GitHub): `LISTING_FAST_PAGES_MIN` / `LISTING_FAST_PAGES_MAX` (pagine della ricerca "tutta Italia" per giro, default 1 e 2), `LISTING_FULL_PER_RUN` (strutture lette per intero a ogni turno, default 0 = mai), `LISTING_FULL_EVERY_RUNS` (un turno di lettura completa ogni N giri, default 4), `REQUEST_DELAY_SECONDS` (pausa tra le richieste, default 15), `MAX_PDF_PER_RUN` (PDF per giro, default 3), `BLOCK_PAUSE_MINUTES` (pausa dopo un blocco del firewall, default 60), secret `ANAS_BOT_KEY` (codice concordato con ANAS, mandato nell'intestazione `X-Waze-Bot-Key`), `WALK_ALWAYS=true` (usa sempre anche il canale a numeri), `ANAS_START_ID` (numero da cui parte il canale a numeri se l'elenco non è mai stato letto).
+- **Impostazioni facoltative** (Variables di GitHub): `LISTING_STRUCTURES_PER_RUN` (strutture lette al massimo per giro, default 23: ferma il giro il tempo, non il conteggio), `LISTING_FAST_PAGES_MIN` / `LISTING_FAST_PAGES_MAX` (pagine per struttura, default 1 e 2), `LISTING_FULL_PER_RUN` (strutture lette per intero a ogni turno, default 0 = mai), `LISTING_FULL_EVERY_RUNS` (un turno di lettura completa ogni N giri, default 4), `REQUEST_DELAY_SECONDS` (pausa tra le richieste, default 150), `JOB_TIME_BUDGET_MINUTES` (durata del giro, default 50), `MAX_PDF_PER_RUN` (PDF per giro, default 4), `BLOCK_PAUSE_MINUTES` (pausa dopo un blocco del firewall, default 60), secret `ANAS_BOT_KEY` (codice concordato con ANAS, mandato nell'intestazione `X-Waze-Bot-Key`), `WALK_ALWAYS=true` (usa sempre anche il canale a numeri), `ANAS_START_ID` (numero da cui parte il canale a numeri se l'elenco non è mai stato letto).
 - **Il sito ANAS non accetta collegamenti dai server di GitHub** (negli Stati Uniti): la connessione scade senza risposta. Per questo il Worker fa da **ponte**: gira vicino a Milano (`placement` in `worker/wrangler.jsonc`) e legge le pagine ANAS per conto del job (`worker/src/relay.js`). Il bot prova prima il collegamento diretto e, se non va, passa da solo al ponte e se lo ricorda (`ANAS_ROUTE=auto`; si può forzare con `direct` o `worker`). Il ponte accetta solo richieste firmate dal job e inoltra solo verso www.stradeanas.it. L'indirizzo del Worker il job lo trova da solo nel database: il Worker lo salva ogni volta che Slack lo chiama o che apri `/health`.
 - **Se ANAS non risponde** né direttamente né dal ponte, arriva un avviso ⚠️ nel canale admin dopo circa 3 ore.
 - **Se modifichi il benvenuto o il modulo** in `anas_bot/views.py`, lancia `python -m anas_bot.export_worker` e carica anche `worker/src/generated.js`: il Worker si ripubblica da solo. Un test ti avvisa se te ne dimentichi.

@@ -5,7 +5,7 @@
 //  POST /slack/commands      comando /anas (e sottocomandi: stato, pausa, riprendi, aiuto)
 //  GET  /health              controllo veloce dopo il deploy
 //  *    /anas-relay/...       ponte verso il sito ANAS per il job (vedi relay.js)
-//  cron (ogni 15 minuti)     avvia il workflow di GitHub Actions che scarica le ordinanze
+//  cron (una volta l'ora)    avvia il workflow di GitHub Actions che scarica le ordinanze
 //
 // Slack vuole una risposta entro 3 secondi: rispondiamo subito e il lavoro lento
 // (chiamate a Slack) prosegue con ctx.waitUntil().

@@ -29,8 +29,10 @@ BLOCK_MARKERS = ("web page blocked", "the url you requested has been blocked", "
 
 
 def _blocked(text: str) -> bool:
-    low = (text or "").lower()
-    return any(m in low for m in BLOCK_MARKERS)
+    import html
+    import re
+    plain = " ".join(html.unescape(re.sub(r"<[^>]+>", " ", text or "")).split()).lower()
+    return any(m in plain for m in BLOCK_MARKERS)
 
 
 def _attack_id(text: str) -> str:

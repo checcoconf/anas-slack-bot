@@ -1,9 +1,9 @@
 """Il lavoro periodico, eseguito da GitHub Actions: `python -m anas_bot.job`.
 
-Ogni esecuzione:
+Ogni esecuzione (una l'ora, dura quasi un'ora: una richiesta ad ANAS ogni ~2,5 minuti):
 1. riallinea i membri del canale (rete di sicurezza: il benvenuto in tempo reale lo dà il Worker);
-2. scarica le ordinanze ANAS nuove a partire dal cursore salvato in D1;
-3. mette in coda e invia i messaggi privati;
+2. legge l'elenco ANAS struttura dopo struttura finché c'è tempo, mandando i messaggi man mano;
+3. (di riserva) scarica le ordinanze nuove per numero a partire dal cursore salvato in D1;
 4. se c'è ancora arretrato (es. dopo giorni di ANAS irraggiungibile) ripete
    finché resta tempo nel budget del job.
 Poi termina: tutto lo stato vive in D1, quindi il giro successivo riparte da lì.
@@ -76,10 +76,16 @@ def run(cfg: Config, db: Database, client, source, listing=None) -> int:
     # 1) Elenco ufficiale di Ordinanze Web: la fonte principale
     lres = None
     if listing is not None:
-        lres = ListingPoller(db, listing, source, cfg).run(today, deadline=started + budget)
-        nres = notifier.run(today)
+        def flush() -> None:  # i messaggi in coda partono subito, dopo ogni struttura letta
+            nonlocal sent, users
+            nres = notifier.run(today)
+            sent += nres.messages_sent
+            users += nres.users_notified
+        poller = ListingPoller(db, listing, source, cfg)
+        poller.after_structure = flush
+        lres = poller.run(today, deadline=started + budget)
+        flush()
         fetched, relevant = lres.new, lres.relevant
-        sent, users = nres.messages_sent, nres.users_notified
         log.info("Elenco ufficiale: %d richieste all'elenco (%d in tutto ad ANAS), %d ordinanze viste, %d nuove "
                  "(%d utili, %d già in vigore prima del bot), %d corrette, %d rimandate, lettura completa: %s%s",
                  lres.requests, getattr(getattr(source, "client", None), "requests_made", 0), lres.seen, lres.new, lres.relevant,

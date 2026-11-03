@@ -19,8 +19,10 @@ blocco lo allunga: alla prima pagina di blocco solleviamo BlockedError e il giro
 
 from __future__ import annotations
 
+import html
 import logging
 import random
+import re
 import time
 
 import requests
@@ -36,8 +38,11 @@ BLOCK_MARKERS = ("web page blocked", "the url you requested has been blocked", "
 
 
 def is_block_page(text: str) -> bool:
-    low = (text or "")[:4000].lower()
-    return any(m in low for m in BLOCK_MARKERS)
+    """True se è la pagina di blocco del firewall. Il testo viene normalizzato (via i tag HTML, le
+    entità, gli accapo e gli spazi doppi): nella pagina vera le frasi sono spezzate su più righe."""
+    plain = re.sub(r"<[^>]+>", " ", text or "")
+    plain = " ".join(html.unescape(plain).split()).lower()
+    return any(m in plain for m in BLOCK_MARKERS)
 
 
 class TransientError(Exception):

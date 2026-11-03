@@ -50,19 +50,22 @@ class Config:
     anas_user_agent: str = "WazeItaliaAnasBot"  # ci presentiamo per quello che siamo (ANAS_USER_AGENT per cambiarlo)
     anas_route: str = "auto"  # auto | direct | worker (vedi anas/relay.py)
     worker_url: str = ""      # di solito non serve: il Worker lo salva da solo nel database
-    # Il firewall di ANAS mette in quarantena chi fa ~9 richieste in meno di un minuto (collaudo del
-    # 03/11/2026): ogni giro fa poche richieste, distanziate, e si ferma al primo blocco per un'ora.
-    request_delay_seconds: float = 15.0  # pausa tra due richieste ad ANAS
-    max_pdf_per_run: int = 3  # PDF scaricati al massimo per giro (gli altri slittano al giro dopo)
+    # Il firewall di ANAS mette in quarantena chi fa troppe richieste in poco tempo (collaudo del 03/11/2026:
+    # 9 in 27 secondi, oppure 6 in 90 minuti). Il giro è lungo (circa un'ora) e "respira": una richiesta
+    # ogni 2-3 minuti, qualunque sia (pagina, ricerca, PDF), e al primo blocco si ferma per un'ora.
+    request_delay_seconds: float = 150.0  # pausa tra due richieste ad ANAS (~20 richieste all'ora)
+    max_pdf_per_run: int = 4  # PDF scaricati al massimo per giro (gli altri slittano al giro dopo)
     block_pause_minutes: int = 60  # dopo una pagina di blocco del firewall: niente richieste per un'ora
-    max_requests_per_cycle: int = 6  # canale a numeri (di riserva): PDF provati per giro, pochi per il firewall
+    max_requests_per_cycle: int = 4  # canale a numeri (di riserva): PDF provati per giro, pochi per il firewall
     max_gap: int = 25
     missing_retry_hours: int = 168  # i numeri saltati si ricontrollano per 7 giorni
     missing_recheck_per_cycle: int = 20
     lookahead_after_hours: int = 6  # senza novità da 6 ore: assaggi più avanti nella numerazione
     stall_alert_hours: int = 72  # senza novità da 3 giorni: avviso nel canale admin
-    job_time_budget_minutes: int = 12
-    # Lettura veloce: la ricerca "tutta Italia" (ordinata dalla più recente), 1-2 pagine da 5 per giro.
+    job_time_budget_minutes: int = 50  # il giro dura quasi un'ora: parte una volta l'ora
+    # Lettura veloce: poche strutture per giro, a rotazione (la ricerca "tutta Italia" non elenca: il sito
+    # si rifiuta oltre 1.000 risultati), 1-2 pagine da 5 per struttura, dalla più recente.
+    listing_structures_per_run: int = 23  # strutture lette per giro: tutte, è il tempo (budget) a fermare il giro
     listing_fast_pages_min: int = 1  # pagine lette sempre
     listing_fast_pages_max: int = 2  # ...e massime, se continuano a comparire ordinanze nuove
     # Lettura completa a rotazione (una struttura per intero): spenta, costa decine di richieste.
@@ -105,6 +108,7 @@ class Config:
         c.listing_full_per_run = _int("LISTING_FULL_PER_RUN", c.listing_full_per_run)
         c.listing_full_every_runs = max(1, _int("LISTING_FULL_EVERY_RUNS", c.listing_full_every_runs))
         c.anas_bot_key = _str("ANAS_BOT_KEY", c.anas_bot_key)
+        c.listing_structures_per_run = max(1, _int("LISTING_STRUCTURES_PER_RUN", c.listing_structures_per_run))
         c.listing_fast_pages_min = _int("LISTING_FAST_PAGES_MIN", c.listing_fast_pages_min)
         c.listing_fast_pages_max = _int("LISTING_FAST_PAGES_MAX", c.listing_fast_pages_max)
         c.walk_always = _bool("WALK_ALWAYS", c.walk_always)

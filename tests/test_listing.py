@@ -194,7 +194,7 @@ def test_new_closure_at_top_of_list_is_notified_next_run(env):
     r = p.run(date(2026, 11, 2))
     assert r.new == 1 and r.relevant == 1
     assert [o.ord_id for o in db.pending_ordinanze()] == [212000]
-    assert (ITALY, 1) in listing.calls                 # trovata dalla lettura veloce della prima pagina
+    assert ("MI", 1) in listing.calls                   # trovata dalla lettura veloce della prima pagina
 
 
 def test_fast_scan_reads_few_pages_when_nothing_is_new(env):
@@ -204,7 +204,7 @@ def test_fast_scan_reads_few_pages_when_nothing_is_new(env):
     listing.calls.clear()
     p.run(date(2026, 11, 2))
     fast = [c for c in listing.calls if c[1] > 0]
-    assert fast == [(ITALY, 1)]                         # niente di nuovo: solo la prima pagina
+    assert fast == [("BA", 1), ("MI", 1)]               # niente di nuovo: solo la prima pagina
 
 
 def test_new_closure_deep_in_list_is_found_by_full_rotation(env):
@@ -327,9 +327,9 @@ def test_firewall_block_stops_the_run_and_pauses_the_bot(env):
     listing.calls.clear()
     r = p.run(date(2026, 11, 2), now=1000.0)
     assert r.blocked and r.block_started and "bloccata" in r.error
-    assert listing.calls == [(ITALY, 1)]                 # una richiesta sola: niente nuovi tentativi
+    assert listing.calls == [("BA", 1)]                  # una richiesta sola: niente nuovi tentativi
     r = p.run(date(2026, 11, 2), now=1000.0 + 30 * 60)   # mezz'ora dopo: ancora in pausa
-    assert r.blocked and not r.block_started and listing.calls == [(ITALY, 1)]
+    assert r.blocked and not r.block_started and listing.calls == [("BA", 1)]
     listing.search_page = real
     listing.pages["MI"].insert(0, _closure(212000, "03/11/2026", numero="11/2026/MI"))
     r = p.run(date(2026, 11, 2), now=1000.0 + 61 * 60)   # un'ora dopo: si riprende da soli
@@ -364,8 +364,9 @@ def test_many_new_ordinances_are_read_across_runs(env):
     for _ in range(3):
         r = p.run(date(2026, 11, 2))
         found.append(r.new)
-    assert found == [9, 5, 0] and sum(found) == 14      # (in pagina 1 c'è anche la vecchia di Milano)
-    assert [c[1] for c in listing.calls] == [1, 2, 1, 2, 3, 4, 1]  # 2 pagine, poi fino alla 4ª, poi 1
+    assert found == [10, 4, 0]
+    bari = [page for code, page in listing.calls if code == "BA"]
+    assert bari == [1, 2, 1, 2, 3, 4, 1]                 # 2 pagine, poi fino alla 4ª (carry), poi di nuovo 1
 
 
 def test_search_retries_once_with_fresh_session_after_http_500():
@@ -404,3 +405,34 @@ def test_direction_and_readable_excerpt_from_real_ss36_record():
     o = record_to_ordinanza(_rec(1, riep, numero="1341/2026/MI"), "Milano", "u")
     assert o.category == CLOSURE and o.direction == "verso Sondrio"
     assert "Interesser" not in o.excerpt and "attuando" not in o.excerpt and "→" in o.excerpt
+
+
+def test_block_page_is_recognized_even_when_split_across_lines():
+    from anas_bot.anas.client import is_block_page
+    page = """<html><head><style>body{margin:0}</style><title>The URL you
+      requested has been blocked</title></head><body><h1>Web&nbsp;Page
+      Blocked!</h1><p>Attack
+      ID: 20000046</p></body></html>"""
+    assert is_block_page(page)
+    assert not is_block_page("<html><title>Errore interno</title><p>HTTP 500</p></html>")
+
+
+def test_search_that_refuses_to_list_raises_listing_error(env):
+    """Il sito oltre 1.000 risultati risponde esito=false e nessun elenco: errore chiaro, non "zero novità"."""
+    cfg, db, listing, src = env
+    p = ListingPoller(db, listing, src, cfg)
+    listing.search_page = lambda code, day, page: {"esito": False, "tot_pagine": 0, "tot_record": 3911, "results": [],
+                                                   "messaggio": "E' stato ragginto il limite massimo"}
+    r = p.run(date(2026, 11, 2))
+    assert r.broken and "3911" in r.error and db.get("listing_done_BA") is None
+
+
+def test_messages_are_flushed_after_each_structure(env):
+    """Giro lungo: il job manda i messaggi in coda dopo ogni struttura, non alla fine dell'ora."""
+    cfg, db, listing, src = env
+    p = ListingPoller(db, listing, src, cfg)
+    _install(p, listing)
+    calls = []
+    p.after_structure = lambda: calls.append(len(listing.calls))
+    p.run(date(2026, 11, 2))
+    assert len(calls) == 2  # una chiamata per struttura letta (BA, MI)

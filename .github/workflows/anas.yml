@@ -1,5 +1,5 @@
 # Il lavoro periodico: scarica le ordinanze ANAS nuove, le classifica e manda i messaggi privati.
-# Lo avvia il Cloudflare Worker ogni 15 minuti (workflow_dispatch). La pianificazione qui sotto
+# Lo avvia il Cloudflare Worker una volta l'ora (workflow_dispatch); ogni giro dura quasi un'ora. La pianificazione qui sotto
 # è solo una riserva: GitHub la sospende dopo 60 giorni senza commit sulle repo pubbliche.
 name: ANAS ordinanze
 
@@ -19,7 +19,7 @@ permissions:
 jobs:
   run:
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 70  # il giro dura ~50 minuti (JOB_TIME_BUDGET_MINUTES) più l'ultima richiesta
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
@@ -43,6 +43,7 @@ jobs:
           WELCOME_EXISTING_MEMBERS: ${{ vars.WELCOME_EXISTING_MEMBERS }}
           UNKNOWN_PROVINCE_FALLBACK: ${{ vars.UNKNOWN_PROVINCE_FALLBACK }}
           # Facoltative: se non le crei valgono i default (vedi README, "Buono a sapersi")
+          LISTING_STRUCTURES_PER_RUN: ${{ vars.LISTING_STRUCTURES_PER_RUN }}
           LISTING_FAST_PAGES_MIN: ${{ vars.LISTING_FAST_PAGES_MIN }}
           LISTING_FAST_PAGES_MAX: ${{ vars.LISTING_FAST_PAGES_MAX }}
           LISTING_FULL_PER_RUN: ${{ vars.LISTING_FULL_PER_RUN }}
@@ -52,6 +53,7 @@ jobs:
           REQUEST_DELAY_SECONDS: ${{ vars.REQUEST_DELAY_SECONDS }}
           MAX_PDF_PER_RUN: ${{ vars.MAX_PDF_PER_RUN }}
           BLOCK_PAUSE_MINUTES: ${{ vars.BLOCK_PAUSE_MINUTES }}
+          JOB_TIME_BUDGET_MINUTES: ${{ vars.JOB_TIME_BUDGET_MINUTES }}
           # codice concordato con ANAS per l'eccezione nel loro firewall (se ve lo danno)
           ANAS_BOT_KEY: ${{ secrets.ANAS_BOT_KEY }}
           WORKER_URL: ${{ vars.WORKER_URL }}
