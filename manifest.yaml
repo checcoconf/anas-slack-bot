@@ -17,7 +17,7 @@ features:
     always_online: true
   slash_commands:
     - command: /anas
-      url: https://anas-slack-bot..workers.dev/slack/commands
+      url: https://anas-slack-bot.workers.dev/slack/commands
       description: Avvisi chiusure ANAS per Waze — zone, stato, pausa
       usage_hint: "[stato | pausa | riprendi | aiuto]"
       should_escape: false
