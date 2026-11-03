@@ -28,7 +28,7 @@ def test_notification_is_readable_with_emoji():
     o = parse_ordinanza(2, s.RAMP_A2, "https://anas.test/2.pdf")
     (msg, ids), = views.notification_messages([o])
     text = msg["blocks"][3]["text"]["text"]
-    assert text.startswith("↪️⛔ *RAMPA / SVINCOLO / AREA DI SERVIZIO CHIUSI*")
+    assert text.startswith("↪️⛔ *SVINCOLO E RAMPA CHIUSI*")  # "svincolo di Frascineto, rampa di ingresso"
     for piece in ("🛣️ *A2*", "📏 km 187+748", "➡️ carreggiata Nord", "📍 Cosenza (CS)",
                   "📅 dal 12/11/2026 al 15/11/2026", "🌙 solo di notte, 22:00–07:00"):
         assert piece in text
@@ -46,3 +46,12 @@ def test_extension_is_flagged():
     (msg, _), = views.notification_messages([o])
     assert "⏩ _chiusura prorogata_" in msg["blocks"][3]["text"]["text"]
     assert "📍 Puglia  ❓ _provincia non determinata_" in msg["blocks"][3]["text"]["text"]
+
+
+def test_access_titles():
+    from anas_bot.views import _access_title
+    assert _access_title("svincolo") == "SVINCOLO CHIUSO"
+    assert _access_title("rampa") == "RAMPA CHIUSA"
+    assert _access_title("area di servizio") == "AREA DI SERVIZIO CHIUSA"
+    assert _access_title("svincolo e rampa") == "SVINCOLO E RAMPA CHIUSI"
+    assert _access_title("") == "ACCESSO CHIUSO"

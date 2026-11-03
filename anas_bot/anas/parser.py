@@ -87,8 +87,19 @@ PARTIAL_PHRASES = (
     "piazzale di sosta",
 )
 
-# Accessi laterali: la chiusura si segnala come "rampa / svincolo / area di servizio", la strada resta aperta.
+# Accessi laterali: la chiusura si segnala come "svincolo chiuso" (o rampa, o area di servizio), la strada resta aperta.
 ACCESS_PHRASES = ("rampa", "svincolo", "area di servizio", "stazione di servizio")
+_ACCESS_KINDS = (("area di servizio", "area di servizio"), ("stazione di servizio", "area di servizio"),
+                 ("svincolo", "svincolo"), ("rampa", "rampa"))
+
+
+def access_kind(text: str) -> str:
+    """Quali accessi chiude il testo (normalizzato): "svincolo", "rampa", "area di servizio", o combinazioni."""
+    kinds: list[str] = []
+    for phrase, kind in _ACCESS_KINDS:
+        if phrase in text and kind not in kinds:
+            kinds.append(kind)
+    return " e ".join(kinds)
 
 # Divieti che valgono solo per alcune categorie di veicoli.
 VEHICLE_RESTRICTION_PHRASES = (
@@ -217,6 +228,7 @@ class Ordinanza:
     time_window: str = ""  # es. "22:00-06:00"
     speed_kmh: int | None = None
     ramp_only: bool = False
+    access_kind: str = ""  # se ramp_only: cosa chiude, es. "svincolo", "rampa", "area di servizio", "svincolo e rampa"
     extension: bool = False  # proroga di una chiusura già in vigore
     new_road: bool = False  # apertura di una strada/svincolo/carreggiata nuova
     speeds: list[int] = field(default_factory=list)  # tutti i limiti dell'ordinanza, es. [30, 50, 70]
@@ -418,6 +430,8 @@ def parse_ordinanza(ord_id: int, text: str, pdf_url: str = "") -> Ordinanza:
         closures = [norm(p) for k, p in kinds if k == CLOSURE]
         o.ramp_only = all(any(a in c for a in ACCESS_PHRASES) and not _WHOLE_CARRIAGEWAY.search(c)
                           for c in closures)
+        if o.ramp_only:
+            o.access_kind = access_kind(" ".join(closures))
         if not o.ramp_only and not any(_WHOLE_CARRIAGEWAY.search(c) for c in closures):
             # dal testo libero del PDF, senza "intera carreggiata"/"tutte le corsie": può essere una parte
             # della strada che il bot non conosce (il 03/11/2026 era una piazzola di sosta)

@@ -152,10 +152,20 @@ def _mrkdwn_escape(s: str) -> str:
     return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
+def _access_title(kind: str) -> str:
+    """"svincolo" -> SVINCOLO CHIUSO, "area di servizio" -> AREA DI SERVIZIO CHIUSA, "svincolo e rampa" -> ... CHIUSI."""
+    if not kind:
+        return "ACCESSO CHIUSO"
+    if " e " in kind:
+        return kind.upper() + " CHIUSI"
+    feminine = kind in ("rampa", "area di servizio")
+    return kind.upper() + (" CHIUSA" if feminine else " CHIUSO")
+
+
 def title_line(o: Ordinanza) -> str:
     """Il "cartello" in cima a ogni avviso: cosa succede, in maiuscolo, con l'emoji giusta."""
     if o.category == CLOSURE:
-        title = "↪️⛔ *RAMPA / SVINCOLO / AREA DI SERVIZIO CHIUSI*" if o.ramp_only else "⛔ *STRADA CHIUSA*"
+        title = f"↪️⛔ *{_access_title(o.access_kind)}*" if o.ramp_only else "⛔ *STRADA CHIUSA*"
         return title + "  ⏩ _chiusura prorogata_" if o.extension else title
     if o.category == REOPENING:
         return "🆕 *NUOVA STRADA APERTA*" if o.new_road else "✅ *APERTA AL TRAFFICO*"

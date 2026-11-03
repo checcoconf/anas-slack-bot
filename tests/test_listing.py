@@ -515,3 +515,14 @@ def test_closure_with_unknown_place_phrase_is_sent_but_flagged():
                            "a partire dal <strong>03/11/2026</strong>"))
     assert not record_to_ordinanza(sure, "Puglia", "u").uncertain
     assert unknown_where("dal km 10+000 al km 12+000, su tutte le corsie, in direzione nord") == ""
+
+
+def test_access_closure_names_what_is_closed():
+    """RA6, svincolo di Passignano Est (ordinanza reale 718/2026/PG, 03/11/2026): "SVINCOLO CHIUSO", non tutti e tre."""
+    from anas_bot.views import title_line
+    rec = _rec(900, _riep("RA 6 RACCORDO AUTOSTRADALE BETTOLLE - PERUGIA", "sullo svincolo in entrata, svincolo in uscita, "
+                          "Passignano Est direzione Bettolle,", ["chiusura al traffico"],
+                          "a partire dal <strong>04/11/2026</strong> fino al <strong>07/11/2026</strong>"), numero="718/2026/PG")
+    o = record_to_ordinanza(rec, "Perugia", "u")
+    assert o.category == CLOSURE and o.ramp_only and o.access_kind == "svincolo"
+    assert title_line(o).startswith("↪️⛔ *SVINCOLO CHIUSO*")

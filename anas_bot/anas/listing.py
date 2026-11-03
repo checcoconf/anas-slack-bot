@@ -40,6 +40,7 @@ from .parser import (
     SPEED,
     Ordinanza,
     _nice_title,
+    access_kind,
     extract_direction,
     extract_roads,
     regions_from_structure,
@@ -218,6 +219,11 @@ class ListingClient:
                 raise BlockedError("firewall ANAS: pagina Ordinanze Web bloccata")
         if r.status_code != 200:
             raise TransientError(f"pagina Ordinanze Web: HTTP {r.status_code}")
+        # Solo i nomi, mai i valori: "cookiesession1" è il cookie di sessione del firewall FortiWeb, e
+        # dal log si vede se arriva anche attraverso il ponte del Worker (senza, il firewall ci tratta
+        # come un client nuovo a ogni richiesta).
+        names = sorted({c.name for c in self.session.cookies}) if self.session is not None else []
+        log.info("Cookie di sessione dopo la pagina: %s", ", ".join(names) or "nessuno")
         self.last_page_html = r.text
         return r.text
 
@@ -527,6 +533,8 @@ def record_to_ordinanza(rec: dict, structure_label: str, pdf_url: str) -> Ordina
     if category == CLOSURE:
         closures = [p for p in provisions if p.category == CLOSURE]
         o.ramp_only = all(p.ramp_only for p in closures)
+        if o.ramp_only:
+            o.access_kind = access_kind(" ".join(p.lanes for p in closures))
     o.direction = extract_direction(chosen.lanes) or extract_direction(chosen.text)
     o.excerpt = clean_excerpt(chosen.plain)
     if category == CLOSURE and chosen.where_unknown:
