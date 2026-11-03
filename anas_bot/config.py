@@ -47,7 +47,7 @@ class Config:
 
     anas_pdf_url: str = "https://www.stradeanas.it/it/anas_ordinanzeweb/getordinanzapdf?ord_id={id}"
     anas_start_id: int | None = None
-    anas_user_agent: str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:159.0) Gecko/20100101 Firefox/159.0"
+    anas_user_agent: str = "WazeItaliaAnasBot/1.0"
     anas_route: str = "auto"  # auto | direct | worker (vedi anas/relay.py)
     worker_url: str = ""      # di solito non serve: il Worker lo salva da solo nel database
     request_delay_seconds: float = 3.0  # pausa tra due richieste ad ANAS (il loro firewall blocca chi esagera)

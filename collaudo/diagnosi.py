@@ -23,7 +23,7 @@ SITE = "https://www.stradeanas.it"
 PAGE = SITE + "/it/ordinanze-web"
 SEARCH = SITE + "/anas_ordinanzeweb/searchordinanze"
 ROBOTS = SITE + "/robots.txt"
-UA = os.environ.get("ANAS_USER_AGENT", "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:159.0) Gecko/20100101 Firefox/159.0")
+UA = os.environ.get("ANAS_USER_AGENT", "WazeItaliaAnasBot/1.0 (+mailto:INSERISCI-LA-TUA-EMAIL)")
 TIMEOUT = (10, 30)
 BLOCK_MARKERS = ("web page blocked", "the url you requested has been blocked", "attack id")
 
