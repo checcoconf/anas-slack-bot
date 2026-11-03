@@ -62,7 +62,7 @@ class AnasClient:
         self.user_agent = user_agent
         self.delay = delay_seconds
         self.timeout = timeout
-        self._last_request = 0.0
+        self._last_request: float | None = None  # None = nessuna richiesta ancora: la prima parte subito
         self.requests_made = 0  # richieste fatte in questo giro (per i log: il budget è piccolo)
         self.via = "diretto"  # oppure "ponte del Worker" (vedi relay.py)
         self.robots = RobotsPolicy.allow_all(user_agent)  # sostituito all'avvio leggendo /robots.txt
@@ -87,7 +87,7 @@ class AnasClient:
         # rispetta sia la nostra pausa sia l'eventuale Crawl-delay dichiarato nel robots.txt;
         # la pausa varia un po' a caso: un intervallo sempre identico al millisecondo è un'altra firma da bot
         delay = max(self.delay, self.robots.crawl_delay()) * random.uniform(1.0, 1.4)
-        wait = delay - (time.monotonic() - self._last_request)
+        wait = 0.0 if self._last_request is None else delay - (time.monotonic() - self._last_request)
         if wait > 0:
             time.sleep(wait)
         self._last_request = time.monotonic()

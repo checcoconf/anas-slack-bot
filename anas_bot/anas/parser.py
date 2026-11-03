@@ -78,7 +78,17 @@ PARTIAL_PHRASES = (
     "parzializzazione",
     "riduzione della carreggiata",
     "banchina",
+    # parti a lato della strada che in Waze non sono segmenti: chiuderle non ferma il traffico
+    # (ordinanza reale SS 18 VAR, 03/11/2026). Le aree di servizio NO: in Waze hanno rampe e vanno segnalate.
+    "piazzola di sosta",
+    "piazzola",
+    "area di sosta",
+    "area di parcheggio",
+    "piazzale di sosta",
 )
+
+# Accessi laterali: la chiusura si segnala come "rampa / svincolo / area di servizio", la strada resta aperta.
+ACCESS_PHRASES = ("rampa", "svincolo", "area di servizio", "stazione di servizio")
 
 # Divieti che valgono solo per alcune categorie di veicoli.
 VEHICLE_RESTRICTION_PHRASES = (
@@ -111,6 +121,7 @@ REOPENING_PHRASES = (
 
 _WHOLE_CARRIAGEWAY = re.compile(
     r"chiusura (?:al traffico |totale )?(?:della|dell'intera|di una|delle) carreggiat[ae]|carreggiata [a-z]+ chiusa"
+    r"|tutte le corsie|intera carreggiata|intera sede|entrambe le carreggiate|tutta la sede|intero tratto|intera tratta"
 )
 _REVOKE_CLOSURE = re.compile(r"\brevoca\b[^;]{0,120}?\bchiusur[ae]\b")
 
@@ -212,6 +223,11 @@ class Ordinanza:
     direction: str = ""  # "entrambe le direzioni", "verso Pescara", "carreggiata Nord"
     excerpt: str = ""
     parser_version: int = PARSER_VERSION
+    # Classificazione non sicura: l'avviso parte lo stesso, con l'etichetta "da verificare", e la dicitura
+    # nuova arriva in admin. Così una dicitura mai vista non viene né scartata né data per certa.
+    uncertain: bool = False
+    uncertain_why: str = ""
+    listing_record: dict = field(default_factory=dict)  # il risultato grezzo dell'elenco, per rileggere a posteriori
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -400,8 +416,13 @@ def parse_ordinanza(ord_id: int, text: str, pdf_url: str = "") -> Ordinanza:
 
     if category == CLOSURE:
         closures = [norm(p) for k, p in kinds if k == CLOSURE]
-        o.ramp_only = all(("rampa" in c or "svincolo" in c) and not _WHOLE_CARRIAGEWAY.search(c)
+        o.ramp_only = all(any(a in c for a in ACCESS_PHRASES) and not _WHOLE_CARRIAGEWAY.search(c)
                           for c in closures)
+        if not o.ramp_only and not any(_WHOLE_CARRIAGEWAY.search(c) for c in closures):
+            # dal testo libero del PDF, senza "intera carreggiata"/"tutte le corsie": può essere una parte
+            # della strada che il bot non conosce (il 03/11/2026 era una piazzola di sosta)
+            o.uncertain = True
+            o.uncertain_why = "chiusura letta dal testo del PDF, senza indicazione esplicita dell'intera carreggiata"
         o.extension = bool(_EXTENSION.search(norm(chosen)) or _EXTENSION.search(section))
 
     if category == SPEED:

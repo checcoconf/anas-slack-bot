@@ -107,3 +107,33 @@ def test_region_from_number_suffix_when_structure_missing():
     from anas_bot.anas.parser import regions_from_structure
     assert regions_from_structure("", "CT") == ["sicilia"]
     assert regions_from_structure("Abruzzo e Molise") == ["abruzzo", "molise"]
+
+
+def test_closure_of_a_rest_area_is_not_a_closure_for_waze():
+    """PDF reale (SS 18 VAR Cilentana, 03/11/2026): chiusa la piazzola di sosta, la strada resta aperta."""
+    from anas_bot.anas.parser import OTHER, parse_ordinanza
+    text = ("ORDINANZA N°800/2026/NA\nORDINA\n* chiusura al traffico su SS 18 VAR CILENTANA dal km 133+900 "
+            "al km 134+000, Sapri, su piazzola di sosta a partire dalle ore 00:00 del 3/11/2026 fino alle ore "
+            "24:00 del 30/12/2026 esclusi i giorni festivi; interesserà tutti gli utenti.")
+    assert parse_ordinanza(214100, text, "u").category == OTHER
+
+
+def test_closure_of_a_service_area_is_reported_as_access_closure():
+    """Un'area di servizio chiusa va segnalata (in Waze ha le sue rampe), ma come accesso, non come strada."""
+    from anas_bot.anas.parser import CLOSURE, parse_ordinanza
+    text = ("ORDINANZA N°801/2026/NA\nORDINA\n* chiusura al traffico su A2 AUTOSTRADA DEL MEDITERRANEO dal km "
+            "10+000 al km 10+500, area di servizio Sala Consilina ovest, a partire dalle ore 00:00 del 3/11/2026 "
+            "fino alle ore 24:00 del 30/12/2026; interesserà tutti gli utenti.")
+    o = parse_ordinanza(214101, text, "u")
+    assert o.category == CLOSURE and o.ramp_only
+
+
+def test_closure_from_pdf_without_whole_carriageway_is_flagged():
+    from anas_bot.anas.parser import CLOSURE, parse_ordinanza
+    text = ("ORDINANZA N°802/2026/BA\nORDINA\n* chiusura al traffico su SS 16 dal km 10+000 al km 12+000, "
+            "Bari, su piattaforma galleggiante a partire dalle ore 00:00 del 3/11/2026; interesserà tutti gli utenti.")
+    o = parse_ordinanza(214102, text, "u")
+    assert o.category == CLOSURE and o.uncertain
+    whole = ("ORDINANZA N°803/2026/BA\nORDINA\n* chiusura al traffico su SS 16 dal km 10+000 al km 12+000 "
+             "su tutte le corsie a partire dalle ore 00:00 del 3/11/2026; interesserà tutti gli utenti.")
+    assert not parse_ordinanza(214103, whole, "u").uncertain

@@ -463,3 +463,55 @@ def test_deep_hours_parsing():
     assert cfg.is_deep_hour(23) and cfg.is_deep_hour(2) and not cfg.is_deep_hour(12)
     cfg.listing_deep_hours = ""
     assert not cfg.is_deep_hour(3)
+
+
+def test_one_structure_in_error_does_not_stop_the_others(env):
+    cfg, db, listing, src = env
+    p = ListingPoller(db, listing, src, cfg)
+    _install(p, listing)
+    real = listing.search_page
+
+    def flaky(code, day, page):
+        if code == "BA":
+            raise TransientError("elenco BA: connection reset")
+        return real(code, day, page)
+    listing.search_page = flaky
+    listing.pages["MI"].insert(0, _closure(212000, "03/11/2026", numero="11/2026/MI"))
+    r = p.run(date(2026, 11, 2))
+    assert r.skipped == ["BA"] and not r.error and not r.blocked
+    assert [o.ord_id for o in db.pending_ordinanze()] == [212000]   # Milano arriva lo stesso
+
+
+def test_two_structures_in_error_in_a_row_pause_like_a_block(env):
+    cfg, db, listing, src = env
+    p = ListingPoller(db, listing, src, cfg)
+    _install(p, listing)
+    listing.search_page = lambda code, day, page: (_ for _ in ()).throw(TransientError("reset"))
+    r = p.run(date(2026, 11, 2), now=1000.0)
+    assert r.blocked and r.block_started and r.skipped == ["BA", "MI"]   # come un blocco: pausa di un'ora
+    assert float(db.get("anas_blocked_until")) == 1000.0 + cfg.block_pause_minutes * 60
+
+
+def test_closure_of_a_lay_by_is_not_a_road_closure():
+    """Ordinanza reale (03/11/2026): chiusura al traffico "su piazzola di sosta" sulla SS 18 VAR: la strada
+    resta aperta, per Waze non è una chiusura."""
+    rec = _rec(214200, _riep("SS 18 VAR CILENTANA dal km 133+900 al km 134+000, Sapri,", "su piazzola di sosta",
+                             ["chiusura al traffico"],
+                             "a partire dalle ore 00:00 del <strong>3/11/2026</strong> fino alle ore 24:00 del "
+                             "<strong>30/12/2026</strong> esclusi i giorni festivi"))
+    o = record_to_ordinanza(rec, "Napoli", "u")
+    assert o.category == OTHER
+
+
+def test_closure_with_unknown_place_phrase_is_sent_but_flagged():
+    """"su ponte Bailey provvisorio" non è una dicitura nota: la chiusura parte, con ⚠️ da verificare."""
+    from anas_bot.anas.listing import unknown_where
+    rec = _rec(777, _riep("SS 16", "su piattaforma galleggiante,", ["chiusura al traffico"],
+                          "a partire dal <strong>03/11/2026</strong> fino al <strong>30/11/2026</strong>"))
+    o = record_to_ordinanza(rec, "Puglia", "u")
+    assert o.category == CLOSURE and o.uncertain and "piattaforma galleggiante" in o.uncertain_why
+    assert o.listing_record["ID"] == "777" and "RIEPILOGO" in o.listing_record
+    sure = _rec(778, _riep("SS 16", "su <strong>tutte le corsie</strong>,", ["chiusura al traffico"],
+                           "a partire dal <strong>03/11/2026</strong>"))
+    assert not record_to_ordinanza(sure, "Puglia", "u").uncertain
+    assert unknown_where("dal km 10+000 al km 12+000, su tutte le corsie, in direzione nord") == ""

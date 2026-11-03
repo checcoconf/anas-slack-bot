@@ -351,10 +351,21 @@ _WHOLE = re.compile(
     r"tutte le corsie|intera carreggiata|intera sede|entrambe le carreggiate|tutta la sede"
     r"|chiusura (?:totale )?(?:della|delle|di una|di entrambe le) carreggiat|carreggiata [a-z]+ chiusa"
 )
-RAMPS = ("rampa", "svincolo")
+RAMPS = ("rampa", "svincolo", "area di servizio", "stazione di servizio")  # accessi: chiusi, ma la strada no
 LANES = ("corsia di marcia", "corsia di sorpasso", "corsia di emergenza", "corsia di accelerazione",
          "corsia di decelerazione", "corsia preferenziale", "corsia di destra", "corsia di sinistra",
-         "corsia destra", "corsia sinistra", "banchina")
+         "corsia destra", "corsia sinistra", "banchina",
+         # parti a lato della strada che in Waze non sono segmenti (ordinanza reale su SS 18 VAR, 03/11/2026)
+         "piazzola di sosta", "piazzola", "area di sosta", "area di parcheggio", "parcheggio")
+# Il "dove" di una chiusura (testo tra i km e "attuando") che il bot sa interpretare. Se dopo "su/sulla/
+# nella/lungo…" c'è una dicitura che non contiene nessuna di queste parole, la chiusura parte lo stesso ma
+# "da verificare", e la dicitura arriva in admin: è così che il vocabolario cresce senza rileggere i PDF.
+KNOWN_WHERE = ("corsi", "carreggiat", "sede stradale", "sede viabile", "rampa", "svincolo", "direzion", "senso",
+               "entrambe", "area di servizio", "stazione di servizio", "tratt", "strada", "piazzola", "area di sosta",
+               "parcheggio", "banchina", "galleria", "viadotto", "ponte", "rotatoria", "intersezione", "incrocio",
+               "complanare", "controstrada", "cavalcavia", "sottopasso", "bretella")
+_WHERE_PHRASE = re.compile(r"\b(?:su|sulla|sulle|sul|sui|sugli|nella|nelle|nel|nei|lungo|in)\s+([^,;]{3,60})")
+
 # Diciture che indicano chiusure parziali o a fasi alterne: il traffico continua a passare.
 PARTIAL_HINTS = ("chiusura della corsia", "chiusura delle corsie", "chiusura della sola corsia",
                  "chiusura alternata", "a fasi alterne", "fasi alternate", "restringimento")
@@ -414,6 +425,17 @@ class Provision:
     lanes: str  # parte tra i km e "attuando": quali corsie/rampe
     category: str = OTHER
     ramp_only: bool = False
+    where_unknown: str = ""  # dicitura del "dove" mai vista (chiusura da verificare)
+
+
+def unknown_where(lanes: str) -> str:
+    """La prima dicitura del "dove" (dopo su/sulla/nella/lungo…) senza nessuna parola nota, oppure ""."""
+    after_km = re.split(r"al km\s*\d{1,4}\+\d{3}|dal km\s*\d{1,4}\+\d{3}", lanes)[-1]
+    for m in _WHERE_PHRASE.finditer(after_km):
+        phrase = m.group(1).strip()
+        if not any(k in phrase for k in KNOWN_WHERE):
+            return phrase
+    return ""
 
 
 def split_provisions(riepilogo_html: str) -> list[Provision]:
@@ -449,6 +471,8 @@ def classify_provision(p: Provision, rec: dict | None = None) -> Provision:
         if not lanes_only and not partial:
             p.category = CLOSURE
             p.ramp_only = ramp and not whole
+            if not whole and not ramp:
+                p.where_unknown = unknown_where(p.lanes)
             return p
     if opening and for_all and not closing:
         p.category = REOPENING
@@ -505,6 +529,10 @@ def record_to_ordinanza(rec: dict, structure_label: str, pdf_url: str) -> Ordina
         o.ramp_only = all(p.ramp_only for p in closures)
     o.direction = extract_direction(chosen.lanes) or extract_direction(chosen.text)
     o.excerpt = clean_excerpt(chosen.plain)
+    if category == CLOSURE and chosen.where_unknown:
+        o.uncertain = True
+        o.uncertain_why = f"dicitura mai vista nel \"dove\": «{chosen.where_unknown}»"
+    o.listing_record = {k: v for k, v in rec.items() if k != "RIEPILOGO"} | {"RIEPILOGO": rec.get("RIEPILOGO", "")}
     return o
 
 

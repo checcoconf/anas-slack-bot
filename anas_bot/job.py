@@ -91,13 +91,15 @@ def run(cfg: Config, db: Database, client, source, listing=None) -> int:
                  "(%d utili, %d già in vigore prima del bot), %d corrette, %d rimandate, lettura completa: %s%s",
                  lres.requests, getattr(getattr(source, "client", None), "requests_made", 0), lres.seen, lres.new, lres.relevant,
                  lres.silent, lres.upgraded, lres.deferred, ",".join(lres.full) or "-",
-                 f", errore: {lres.error}" if lres.error else "")
+                 (f", saltate: {','.join(lres.skipped)}" if lres.skipped else "")
+                 + (f", errore: {lres.error}" if lres.error else ""))
         _listing_alerts(db, client, cfg, lres)
 
-    # 2) Canale a numeri: di riserva, se l'elenco non è disponibile (o se richiesto con WALK_ALWAYS).
-    #    Mai durante la pausa dopo un blocco del firewall: insistere la allungherebbe.
+    # 2) Canale a numeri: di riserva, solo se l'elenco ha cambiato formato (o se richiesto con WALK_ALWAYS).
+    #    Mai per un errore di rete o durante la pausa dopo un blocco: prova numeri inesistenti (404) e il
+    #    firewall conta anche quelli (03/11/2026: 4 PDF a vuoto hanno contribuito al blocco).
     blocked = bool(lres and lres.blocked)
-    if not blocked and (listing is None or (lres and lres.error) or cfg.walk_always):
+    if not blocked and (listing is None or (lres and lres.broken) or cfg.walk_always):
         poller = Poller(db, source, cfg)
         while True:
             pres = poller.run_cycle()
@@ -171,6 +173,16 @@ def _listing_alerts(db: Database, client, cfg: Config, lres) -> None:
                                + "\n".join(f"• `{m}` (<{lres.unknown[m]}|esempio PDF>)" for m in fresh)
                                + "\nControlla che vengano classificati bene: istruzioni in collaudo/LEGGIMI.md.")
             db.set("alerted_measures", json.dumps(sorted(already | set(fresh)), ensure_ascii=False))
+
+    if lres.uncertain:
+        already = set(json.loads(db.get("alerted_uncertain", "[]") or "[]"))
+        fresh = sorted(set(lres.uncertain) - already)
+        if fresh:
+            admin(client, cfg, "⚠️ Chiusure inviate come *da verificare* (dicitura che il bot non conosce):\n"
+                               + "\n".join(f"• {m} (<{lres.uncertain[m]}|PDF>)" for m in fresh)
+                               + "\nSe la strada era davvero chiusa, va bene così; se no, la dicitura va aggiunta "
+                               "alle parti di strada da ignorare (LANES in anas_bot/anas/listing.py).")
+            db.set("alerted_uncertain", json.dumps(sorted(already | set(fresh)), ensure_ascii=False))
 
 
 def main() -> int:

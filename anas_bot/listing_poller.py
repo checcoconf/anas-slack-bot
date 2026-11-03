@@ -75,8 +75,10 @@ class ListingResult:
     silent: int = 0
     upgraded: int = 0
     unknown: dict[str, str] = field(default_factory=dict)  # provvedimento mai visto -> link al PDF
+    uncertain: dict[str, str] = field(default_factory=dict)  # chiusura da verificare: motivo -> link al PDF
     max_id: int = 0  # numero più alto visto: tiene vicino al presente il canale a numeri di riserva
     deferred: int = 0  # ordinanze rimandate al giro dopo perché il tetto dei PDF era esaurito
+    skipped: list[str] = field(default_factory=list)  # strutture saltate per un errore di rete
     error: str = ""
     broken: bool = False  # il formato dell'elenco è cambiato
     blocked: bool = False  # il firewall ci ha bloccati (o siamo ancora in pausa dopo un blocco)
@@ -149,6 +151,7 @@ class ListingPoller:
             o = Ordinanza(ord_id=ord_id, category=original.category, pdf_url=url)
             for name in _INHERITED:
                 setattr(o, name, getattr(original, name))
+            o.uncertain, o.uncertain_why = original.uncertain, original.uncertain_why
             if "revoca" in tipo:
                 o.category = REOPENING if original.category == CLOSURE else OTHER
                 o.end_date, o.open_ended = "", True
@@ -192,6 +195,8 @@ class ListingPoller:
             measures = [m for p in split_provisions(rec.get("RIEPILOGO", "")) for m in p.measures]
             for m in unknown_measures(measures):
                 res.unknown.setdefault(m, url)
+            if o.uncertain and o.category in RELEVANT:
+                res.uncertain.setdefault(o.uncertain_why, url)
             self.db.set("anas_last_found_at", str(time.time()))
         self.db.save_ordinanza(o, text, silent=silent)
         res.new += 1
@@ -286,16 +291,35 @@ class ListingPoller:
         n = len(structures)
         off = int(self.db.get("listing_fast_rr", "0") or 0) % n
         k = min(self.cfg.listing_structures_per_run, n)
-        done = 0
-        for st in [structures[(off + i) % n] for i in range(k)]:
-            if late():
-                log.info("Elenco: tempo del giro finito, %s e seguenti al prossimo giro", st.code)
-                break
-            self._fast_structure(st, today, installed, res)
-            done += 1
-            if self.after_structure:
-                self.after_structure()  # i messaggi partono subito, non alla fine dell'ora
-        self.db.set("listing_fast_rr", str((off + done) % n))
+        done, streak, failed = 0, 0, []
+        try:
+            for st in [structures[(off + i) % n] for i in range(k)]:
+                if late():
+                    log.info("Elenco: tempo del giro finito, %s e seguenti al prossimo giro", st.code)
+                    break
+                try:
+                    self._fast_structure(st, today, installed, res)
+                except BlockedError:
+                    raise
+                except TransientError as exc:
+                    # rete o sito in errore su questa struttura: si passa alla successiva; se capita
+                    # due volte di fila il sito sta rifiutando tutto e si chiude il giro (riprova all'ora dopo)
+                    done += 1
+                    streak += 1
+                    failed.append(st.code)
+                    log.warning("Elenco: struttura %s saltata in questo giro: %s", st.code, exc)
+                    if streak >= 2:
+                        # due di fila: è il firewall che chiude le connessioni (visto il 03/11/2026 alla 21ª
+                        # richiesta dell'ora), non un guasto di rete: stessa pausa di un blocco
+                        raise BlockedError(f"il sito chiude le connessioni ({', '.join(failed)}): {exc}") from exc
+                    continue
+                done += 1
+                streak = 0
+                if self.after_structure:
+                    self.after_structure()  # i messaggi partono subito, non alla fine dell'ora
+        finally:
+            self.db.set("listing_fast_rr", str((off + done) % n))
+            res.skipped = failed
 
     def _fast_structure(self, st: Structure, today: date, installed: str, res: ListingResult) -> None:
         self.watermark = int(self.db.get(f"listing_watermark_{st.code}", "0") or 0)
@@ -308,6 +332,7 @@ class ListingPoller:
             min_pages = max(min_pages, self.cfg.listing_deep_pages)
         max_pages = max(min_pages, self.cfg.listing_fast_pages_max + carry)
         page, pages, new, max_id = 1, 1, 0, 0
+        seen0, new0 = res.seen, res.new
         while page <= min(pages, max_pages):
             body = self.listing.search_page(st.code, today, page)
             res.requests += 1
@@ -322,7 +347,12 @@ class ListingPoller:
             if not baseline and page >= min_pages and new == 0:
                 break
             page += 1
+        seen, found = res.seen - seen0, res.new - new0
         still_new = not baseline and page > max_pages and new > 0 and page <= pages
+        log.info("Elenco %s: %d pagine, %d ordinanze viste, %d nuove%s (richieste ad ANAS finora: %d)",
+                 st.code, page - 1 if page > max_pages or page > pages else page, seen, found,
+                 " (presa visione)" if baseline else "",
+                 getattr(getattr(self.listing, "anas", None), "requests_made", 0))
         self.db.set(carry_key, str(max_pages if still_new else 0))
         if baseline and max_id > 0:
             self.db.set(f"listing_done_{st.code}", today.isoformat())

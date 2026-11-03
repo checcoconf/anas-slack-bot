@@ -50,11 +50,13 @@ class Config:
     anas_user_agent: str = "WazeItaliaAnasBot"  # ci presentiamo per quello che siamo (ANAS_USER_AGENT per cambiarlo)
     anas_route: str = "auto"  # auto | direct | worker (vedi anas/relay.py)
     worker_url: str = ""      # di solito non serve: il Worker lo salva da solo nel database
-    # Il firewall di ANAS mette in quarantena chi fa troppe richieste in poco tempo (collaudo del 03/11/2026:
-    # 9 in 27 secondi, oppure 6 in 90 minuti). Il giro è lungo (circa un'ora) e "respira": una richiesta
-    # ogni 2-3 minuti, qualunque sia (pagina, ricerca, PDF), e al primo blocco si ferma per un'ora.
-    request_delay_seconds: float = 150.0  # pausa tra due richieste ad ANAS (~20 richieste all'ora)
-    max_pdf_per_run: int = 4  # PDF scaricati al massimo per giro (gli altri slittano al giro dopo)
+    # Il firewall di ANAS tollera circa 20 richieste per ora "scorrevole" (03/11/2026: 19 in 55 minuti dopo
+    # due ore di silenzio sono passate; la 21ª in 65 minuti è stata chiusa con un "connection reset"; le
+    # raffiche e i giri accodati senza pausa sono stati bloccati prima). Il giro è lungo (circa un'ora) e
+    # "respira": una richiesta ogni 4-5 minuti, qualunque sia (pagina, ricerca, PDF), cioè 13-15 all'ora,
+    # e al primo blocco (o a due connessioni chiuse di fila) si ferma per un'ora.
+    request_delay_seconds: float = 240.0  # pausa tra due richieste ad ANAS (~13 richieste all'ora)
+    max_pdf_per_run: int = 3  # PDF scaricati al massimo per giro (gli altri slittano al giro dopo)
     block_pause_minutes: int = 60  # dopo una pagina di blocco del firewall: niente richieste per un'ora
     max_requests_per_cycle: int = 4  # canale a numeri (di riserva): PDF provati per giro, pochi per il firewall
     max_gap: int = 25

@@ -28,7 +28,7 @@ def test_notification_is_readable_with_emoji():
     o = parse_ordinanza(2, s.RAMP_A2, "https://anas.test/2.pdf")
     (msg, ids), = views.notification_messages([o])
     text = msg["blocks"][3]["text"]["text"]
-    assert text.startswith("↪️⛔ *RAMPA / SVINCOLO CHIUSO*")
+    assert text.startswith("↪️⛔ *RAMPA / SVINCOLO / AREA DI SERVIZIO CHIUSI*")
     for piece in ("🛣️ *A2*", "📏 km 187+748", "➡️ carreggiata Nord", "📍 Cosenza (CS)",
                   "📅 dal 12/11/2026 al 15/11/2026", "🌙 solo di notte, 22:00–07:00"):
         assert piece in text

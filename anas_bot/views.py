@@ -155,7 +155,7 @@ def _mrkdwn_escape(s: str) -> str:
 def title_line(o: Ordinanza) -> str:
     """Il "cartello" in cima a ogni avviso: cosa succede, in maiuscolo, con l'emoji giusta."""
     if o.category == CLOSURE:
-        title = "↪️⛔ *RAMPA / SVINCOLO CHIUSO*" if o.ramp_only else "⛔ *STRADA CHIUSA*"
+        title = "↪️⛔ *RAMPA / SVINCOLO / AREA DI SERVIZIO CHIUSI*" if o.ramp_only else "⛔ *STRADA CHIUSA*"
         return title + "  ⏩ _chiusura prorogata_" if o.extension else title
     if o.category == REOPENING:
         return "🆕 *NUOVA STRADA APERTA*" if o.new_road else "✅ *APERTA AL TRAFFICO*"
@@ -180,6 +180,8 @@ def time_line(window: str) -> str:
 def ordinanza_blocks(o: Ordinanza) -> list[dict]:
     roads = ", ".join(f"{r} {o.road_names[r]}" if r in o.road_names else r for r in o.roads[:4]) or "strada n.d."
     lines = [title_line(o), f"🛣️ *{_mrkdwn_escape(roads)}*"]
+    if o.uncertain:
+        lines.append("⚠️ _da verificare: " + _mrkdwn_escape(o.uncertain_why) + "_")
 
     if o.km_from:
         lines.append(f"📏 km {o.km_from}" + (f" → {o.km_to}" if o.km_to else ""))
