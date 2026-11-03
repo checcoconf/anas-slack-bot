@@ -44,7 +44,14 @@ class AnasClient:
         self.via = "diretto"  # oppure "ponte del Worker" (vedi relay.py)
         self.robots = RobotsPolicy.allow_all(user_agent)  # sostituito all'avvio leggendo /robots.txt
         self.session = requests.Session()
-        self.session.headers.update({"User-Agent": user_agent, "Accept": "application/pdf,*/*;q=0.5"})
+        # Header coerenti con lo User-Agent (un Firefox italiano): un UA da browser con header
+        # "da script" e' una contraddizione che i filtri anti-bot riconoscono.
+        self.session.headers.update({
+            "User-Agent": user_agent,
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "it-IT,it;q=0.8,en-US;q=0.5,en;q=0.3",
+            "Accept-Encoding": "gzip, deflate",  # niente "br": richiederebbe il pacchetto brotli
+        })
         retry = Retry(total=2, connect=2, read=2, status=0, backoff_factor=2,
                       allowed_methods=frozenset({"GET"}))
         self.session.mount("https://", HTTPAdapter(max_retries=retry))
