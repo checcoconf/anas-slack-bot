@@ -56,6 +56,10 @@ class Config:
     # "respira": una richiesta ogni 4-5 minuti, qualunque sia (pagina, ricerca, PDF), cioè 13-15 all'ora,
     # e al primo blocco (o a due connessioni chiuse di fila) si ferma per un'ora.
     request_delay_seconds: float = 240.0  # pausa tra due richieste ad ANAS (~13 richieste all'ora)
+    # Soglia reale osservata a regime (04/11/2026, giri uno dietro l'altro): blocco alla 14ª richiesta
+    # nell'ora scorrevole. Ieri 19 in 55 minuti erano passate solo dopo due ore di silenzio.
+    max_requests_per_hour: int = 12  # tetto per ora scorrevole, contato attraverso i giri (anas/budget.py)
+    browser_like: bool = False  # esperimento: scaricare anche CSS/script della pagina, come un browser (vedi listing.py)
     max_pdf_per_run: int = 3  # PDF scaricati al massimo per giro (gli altri slittano al giro dopo)
     block_pause_minutes: int = 60  # dopo una pagina di blocco del firewall: niente richieste per un'ora
     max_requests_per_cycle: int = 4  # canale a numeri (di riserva): PDF provati per giro, pochi per il firewall
@@ -70,18 +74,32 @@ class Config:
     listing_structures_per_run: int = 23  # strutture lette per giro: tutte, è il tempo (budget) a fermare il giro
     listing_fast_pages_min: int = 1  # pagine lette sempre
     listing_fast_pages_max: int = 2  # ...e massime, se continuano a comparire ordinanze nuove
+    # Ricerche nazionali per le urgenze, a ogni giro prima delle strutture: "CHIAVE=causa/dettaglio/nome;..."
+    # con i valori che il sito manda nei campi causa e causa_dett ("*" = tutti). Una ricerca nazionale
+    # funziona solo se resta sotto i 1.000 risultati (03/11/2026: Fenomeni naturali 211, Gestione della
+    # viabilità 2.024); se sfora, il bot la spegne per un giorno e avvisa.
+    national_searches: str = ""
     # Lettura profonda di notte (ANAS non pubblica, il ritmo resta lo stesso): più pagine per struttura,
     # per le ordinanze che il sito non mette in prima pagina (ordina per inizio validità, non per pubblicazione).
     listing_deep_pages: int = 4  # pagine lette sempre, per struttura, nelle ore "profonde"
     listing_deep_hours: str = "0-6"  # ore locali (da-a, estremo finale escluso); vuoto = mai
-    # Lettura completa a rotazione (una struttura per intero): spenta, costa decine di richieste.
-    listing_full_per_run: int = 0  # strutture rilette per intero a ogni turno (0 = mai)
-    listing_full_every_runs: int = 4  # un turno di lettura completa ogni N giri
     anas_bot_key: str = ""  # codice concordato con ANAS, mandato nell'intestazione X-Waze-Bot-Key
     walk_always: bool = False  # canale a numeri anche quando l'elenco funziona (di norma solo di riserva)
 
     welcome_existing_members: bool = True
     unknown_province_fallback: bool = True
+
+    def national(self) -> list[tuple[str, str, str, str]]:
+        """[(chiave, causa, causa_dett, nome)] dalle ricerche nazionali configurate."""
+        out = []
+        for item in (x.strip() for x in self.national_searches.split(";") if x.strip()):
+            key, _, rest = item.partition("=")
+            parts = [p.strip() for p in rest.split("/")]
+            causa = parts[0] if len(parts) > 0 and parts[0] else "*"
+            dett = parts[1] if len(parts) > 1 and parts[1] else "*"
+            label = parts[2] if len(parts) > 2 and parts[2] else key.strip()
+            out.append((key.strip().upper(), causa, dett, label))
+        return out
 
     def is_deep_hour(self, hour: int) -> bool:
         """True se l'ora locale (0-23) cade nella fascia della lettura profonda, es. "0-6" oppure "22-6"."""
@@ -113,18 +131,19 @@ class Config:
         c.worker_url = _str("WORKER_URL", c.worker_url)
         c.request_delay_seconds = float(_str("REQUEST_DELAY_SECONDS", str(c.request_delay_seconds)))
         c.max_pdf_per_run = _int("MAX_PDF_PER_RUN", c.max_pdf_per_run)
+        c.max_requests_per_hour = _int("MAX_REQUESTS_PER_HOUR", c.max_requests_per_hour)
+        c.browser_like = _bool("BROWSER_LIKE", c.browser_like)
         c.block_pause_minutes = _int("BLOCK_PAUSE_MINUTES", c.block_pause_minutes)
         c.max_requests_per_cycle = _int("MAX_REQUESTS_PER_CYCLE", c.max_requests_per_cycle)
         c.max_gap = _int("MAX_GAP", c.max_gap)
         c.missing_retry_hours = _int("MISSING_RETRY_HOURS", c.missing_retry_hours)
         c.lookahead_after_hours = _int("LOOKAHEAD_AFTER_HOURS", c.lookahead_after_hours)
         c.stall_alert_hours = _int("STALL_ALERT_HOURS", c.stall_alert_hours)
-        c.listing_full_per_run = _int("LISTING_FULL_PER_RUN", c.listing_full_per_run)
-        c.listing_full_every_runs = max(1, _int("LISTING_FULL_EVERY_RUNS", c.listing_full_every_runs))
         c.anas_bot_key = _str("ANAS_BOT_KEY", c.anas_bot_key)
         c.listing_structures_per_run = max(1, _int("LISTING_STRUCTURES_PER_RUN", c.listing_structures_per_run))
         c.listing_fast_pages_min = _int("LISTING_FAST_PAGES_MIN", c.listing_fast_pages_min)
         c.listing_fast_pages_max = _int("LISTING_FAST_PAGES_MAX", c.listing_fast_pages_max)
+        c.national_searches = os.environ.get("NATIONAL_SEARCHES", c.national_searches).strip()
         c.listing_deep_pages = _int("LISTING_DEEP_PAGES", c.listing_deep_pages)
         c.listing_deep_hours = os.environ.get("LISTING_DEEP_HOURS", c.listing_deep_hours).strip()
         c.walk_always = _bool("WALK_ALWAYS", c.walk_always)

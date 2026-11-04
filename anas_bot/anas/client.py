@@ -64,6 +64,7 @@ class AnasClient:
         self.timeout = timeout
         self._last_request: float | None = None  # None = nessuna richiesta ancora: la prima parte subito
         self.requests_made = 0  # richieste fatte in questo giro (per i log: il budget è piccolo)
+        self.ledger = None  # RequestLedger (anas/budget.py): budget per ora scorrevole, condiviso tra i giri
         self.via = "diretto"  # oppure "ponte del Worker" (vedi relay.py)
         self.robots = RobotsPolicy.allow_all(user_agent)  # sostituito all'avvio leggendo /robots.txt
         self.session = requests.Session()
@@ -75,7 +76,9 @@ class AnasClient:
             "Accept-Language": "it-IT,it;q=0.8,en-US;q=0.5,en;q=0.3",
             "Accept-Encoding": "gzip, deflate",  # niente "br": richiederebbe il pacchetto brotli
         })
-        retry = Retry(total=2, connect=2, read=2, status=0, backoff_factor=2,
+        # Solo errori di connessione (TCP non aperto): mai riprovare una connessione chiusa dal server
+        # ("connection reset"), che per il firewall di ANAS è un "no" e riprovare lo allunga.
+        retry = Retry(total=1, connect=1, read=0, status=0, backoff_factor=2,
                       allowed_methods=frozenset({"GET"}))
         self.session.mount("https://", HTTPAdapter(max_retries=retry))
         self.session.mount("http://", HTTPAdapter(max_retries=retry))
@@ -90,6 +93,8 @@ class AnasClient:
         wait = 0.0 if self._last_request is None else delay - (time.monotonic() - self._last_request)
         if wait > 0:
             time.sleep(wait)
+        if self.ledger is not None:
+            self.ledger.before_request()  # può aspettare ancora, o fermare il giro (BudgetExhausted)
         self._last_request = time.monotonic()
         self.requests_made += 1
 

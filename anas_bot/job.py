@@ -24,6 +24,7 @@ from zoneinfo import ZoneInfo
 from slack_sdk.errors import SlackApiError
 
 from . import __version__
+from .anas.budget import RequestLedger
 from .anas.client import AnasClient, TransientError
 from .anas.listing import ListingClient
 from .anas.pdftext import pdf_to_text
@@ -88,9 +89,9 @@ def run(cfg: Config, db: Database, client, source, listing=None) -> int:
         flush()
         fetched, relevant = lres.new, lres.relevant
         log.info("Elenco ufficiale: %d richieste all'elenco (%d in tutto ad ANAS), %d ordinanze viste, %d nuove "
-                 "(%d utili, %d già in vigore prima del bot), %d corrette, %d rimandate, lettura completa: %s%s",
+                 "(%d utili, %d già in vigore prima del bot), %d corrette, %d rimandate, strutture: %s%s",
                  lres.requests, getattr(getattr(source, "client", None), "requests_made", 0), lres.seen, lres.new, lres.relevant,
-                 lres.silent, lres.upgraded, lres.deferred, ",".join(lres.full) or "-",
+                 lres.silent, lres.upgraded, lres.deferred, ",".join(lres.structures) or "-",
                  (f", saltate: {','.join(lres.skipped)}" if lres.skipped else "")
                  + (f", errore: {lres.error}" if lres.error else ""))
         _listing_alerts(db, client, cfg, lres)
@@ -174,6 +175,12 @@ def _listing_alerts(db: Database, client, cfg: Config, lres) -> None:
                                + "\nControlla che vengano classificati bene: istruzioni in collaudo/LEGGIMI.md.")
             db.set("alerted_measures", json.dumps(sorted(already | set(fresh)), ensure_ascii=False))
 
+    if lres.national_off:
+        admin(client, cfg, "⚠️ Ricerca nazionale spenta per oggi (sfora i 1.000 risultati o ha cambiato forma):\n"
+                           + "\n".join(f"• {m}" for m in lres.national_off)
+                           + "\nLe stesse ordinanze arrivano comunque dalla rotazione per struttura, con più ritardo. "
+                           "Se si ripete, togli quella voce da NATIONAL_SEARCHES.")
+
     if lres.uncertain:
         already = set(json.loads(db.get("alerted_uncertain", "[]") or "[]"))
         fresh = sorted(set(lres.uncertain) - already)
@@ -197,9 +204,12 @@ def main() -> int:
     db = open_database(cfg)
     client = build_web_client(cfg.slack_bot_token)
     anas = AnasClient(cfg.anas_pdf_url, cfg.anas_user_agent, cfg.request_delay_seconds)
+    anas.ledger = RequestLedger(db, cfg.max_requests_per_hour)
+    log.info("Budget ANAS: %d richieste nell'ultima ora, tetto %d", anas.ledger.in_last_hour(), cfg.max_requests_per_hour)
     if cfg.anas_bot_key:
         anas.session.headers["X-Waze-Bot-Key"] = cfg.anas_bot_key  # se ANAS ci riconosce da questo codice
     listing = ListingClient(anas)
+    listing.browser_like = cfg.browser_like
     blocked_until = float(db.get(BLOCKED_UNTIL, "0") or 0)
     if blocked_until > time.time():
         log.warning("In pausa dopo un blocco del firewall ANAS: nessuna richiesta in questo giro")

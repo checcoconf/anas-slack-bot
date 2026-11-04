@@ -69,24 +69,12 @@ class Membership:
                     break
         return members
 
-    def _describe_token(self) -> None:
-        """Diagnosi (mai il token): in quale workspace e con quale utente-bot sta lavorando il job.
-        Se il bot "non trova" un canale in cui è stato invitato, qui si vede se il token è di un altro posto."""
-        try:
-            r = self.client.auth_test()
-            log.warning("Il token Slack in uso appartiene al workspace «%s» (utente-bot %s): controlla che i canali "
-                        "%s stiano lì e che quel bot ne sia membro", r.get("team"), r.get("user_id"),
-                        ", ".join(self.cfg.channel_ids))
-        except SlackApiError as exc:
-            log.warning("auth.test non riuscito: %s", exc.response.get("error") if exc.response else exc)
-
     def reconcile(self, first_run: bool = False) -> tuple[int, int]:
         """Allinea il database ai membri reali dei canali. Restituisce (benvenuti, uscite)."""
         try:
             raw = self.channel_members()
         except SlackApiError as exc:
             log.warning("Riallineamento non riuscito: %s", exc.response.get("error") if exc.response else exc)
-            self._describe_token()
             return 0, 0
         known = {u.user_id: u for u in self.db.all_users()}
         # users.info solo per chi non conosciamo ancora: meno chiamate a Slack

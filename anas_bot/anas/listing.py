@@ -98,8 +98,17 @@ class ListingError(Exception):
 
 @dataclass
 class Structure:
-    code: str  # valore inviato nella ricerca, es. "BA"
-    label: str  # nome nel menu, es. "Puglia"
+    """Una lettura dell'elenco: di norma una struttura territoriale (BA, MI...), oppure una ricerca
+    nazionale filtrata per causa (area "*"), per le urgenze: frane, emergenze... (vedi listing_poller)."""
+    code: str  # chiave della lettura (BA, MI... oppure NAZ-FEN): è anche la chiave in D1
+    label: str  # nome nel menu, es. "Puglia", o della ricerca nazionale
+    causa: str = "*"  # filtro "Causa" della ricerca (il valore che manda il sito), "*" = tutte
+    causa_dett: str = "*"  # filtro "Dettaglio causa", "*" = tutti
+    national: bool = False  # True: area "*" (tutta Italia), ha senso solo con un filtro che resti sotto i 1.000
+
+    @property
+    def area(self) -> str:
+        return ITALY if self.national else self.code
 
 
 # --- Lettura del menu delle strutture -------------------------------------------
@@ -219,13 +228,38 @@ class ListingClient:
                 raise BlockedError("firewall ANAS: pagina Ordinanze Web bloccata")
         if r.status_code != 200:
             raise TransientError(f"pagina Ordinanze Web: HTTP {r.status_code}")
-        # Solo i nomi, mai i valori: "cookiesession1" è il cookie di sessione del firewall FortiWeb, e
-        # dal log si vede se arriva anche attraverso il ponte del Worker (senza, il firewall ci tratta
-        # come un client nuovo a ogni richiesta).
-        names = sorted({c.name for c in self.session.cookies}) if self.session is not None else []
-        log.info("Cookie di sessione dopo la pagina: %s", ", ".join(names) or "nessuno")
         self.last_page_html = r.text
+        if self.browser_like:
+            self._fetch_page_assets(r.text)
         return r.text
+
+    # Esperimento (BROWSER_LIKE=true): dopo la pagina, scaricare anche i suoi CSS e script, come fa un
+    # browser, per misurare se il firewall tratta meglio chi "carica la pagina intera". Ogni risorsa è
+    # una richiesta in più (conta nel budget orario): si tiene acceso un giorno e si confrontano i blocchi.
+    browser_like = False
+    browser_like_max_assets = 6
+    _ASSET_RE = re.compile(r"""<(?:link[^>]+rel=["']stylesheet["'][^>]+href|script[^>]+src)=["']([^"']+)["']""", re.I)
+
+    def _fetch_page_assets(self, page_html: str) -> None:
+        urls = []
+        for u in self._ASSET_RE.findall(page_html):
+            if u.startswith("//"):
+                u = "https:" + u
+            elif u.startswith("/"):
+                u = SITE + u
+            if u.startswith(SITE) and u not in urls:
+                urls.append(u)
+        headers = {"Accept": "text/css,*/*;q=0.1", "Referer": PAGE_URL, "Sec-Fetch-Dest": "style",
+                   "Sec-Fetch-Mode": "no-cors", "Sec-Fetch-Site": "same-origin"}
+        for u in urls[: self.browser_like_max_assets]:
+            if u.endswith(".js") or ".js?" in u:
+                headers = {**headers, "Accept": "*/*", "Sec-Fetch-Dest": "script"}
+            try:
+                self.anas._throttle()
+                self.session.get(u, headers=headers, timeout=self.anas.timeout)
+            except Exception as exc:  # noqa: BLE001 - è un esperimento: una risorsa che non arriva non ferma il giro
+                log.info("Risorsa della pagina non scaricata (%s): %s", u, exc)
+        log.info("Esperimento BROWSER_LIKE: scaricate %d risorse della pagina", min(len(urls), self.browser_like_max_assets))
 
     def structures(self, day: date | None = None) -> list[Structure]:
         """Le strutture territoriali: dal menu della pagina se c'è, altrimenti scoperte interrogando la ricerca."""
@@ -256,14 +290,14 @@ class ListingClient:
         """Ordinanze in vigore in tutta Italia (per controllare di non aver dimenticato strutture)."""
         return int(self.search_page("*", day, 1).get("tot_record") or 0)
 
-    def search_page(self, code: str, day: date, page: int) -> dict:
+    def search_page(self, code: str, day: date, page: int, causa: str = "*", causa_dett: str = "*") -> dict:
         if not self.anas.robots.allowed(SEARCH_URL):
             raise TransientError("robots.txt vieta la ricerca delle ordinanze: non interrogo il sito")
         if not self._primed:
             self.prime()
         self.anas._throttle()
         data = {
-            "action": "search_ordinanze", "page": str(page), "causa": "*", "causa_dett": "*",
+            "action": "search_ordinanze", "page": str(page), "causa": causa or "*", "causa_dett": causa_dett or "*",
             "area_compartimentale": code, "strada": "*", "numero_ordinanza": "", "limitazioni": "*",
             "data_validita_inizio": day.isoformat(), "data_validita_fine": "",
             "random": "".join(random.choices(string.ascii_letters, k=5)),

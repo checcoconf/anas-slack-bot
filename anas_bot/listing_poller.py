@@ -6,7 +6,10 @@ vigore il 03/11/2026) e il suo firewall mette in quarantena chi fa più di una m
 (collaudo del 03/11/2026: bloccati dopo 9 richieste in 27 secondi da un indirizzo, e dopo 6 richieste
 in 90 minuti da un altro). Per questo ogni giro fa pochissime richieste, distanziate:
 
-1. LETTURA VELOCE A ROTAZIONE: il giro dura quasi un'ora e fa una richiesta ogni ~2,5 minuti
+0. URGENZE IN NAZIONALE (NATIONAL_SEARCHES): a ogni giro, prima di tutto, le ricerche su tutta Italia
+   filtrate per causa (frane, emergenze...): restano sotto i 1.000 risultati e la prima pagina ha le
+   più recenti di tutte le regioni. Così le urgenze arrivano entro l'ora, ovunque siano.
+1. LETTURA VELOCE A ROTAZIONE: il giro dura quasi un'ora e fa una richiesta ogni ~4 minuti
    (REQUEST_DELAY_SECONDS): struttura dopo struttura, 1-2 pagine da 5 ciascuna, dalla più recente,
    finché il tempo (JOB_TIME_BUDGET_MINUTES) finisce; il giro dopo riparte dalla prima non letta.
    Si ferma appena una pagina non contiene niente di nuovo; se era ancora tutta nuova, al giro dopo
@@ -17,8 +20,8 @@ in 90 minuti da un altro). Per questo ogni giro fa pochissime richieste, distanz
    le ordinanze che ne hanno bisogno oltre il tetto restano "nuove" e slittano al giro dopo.
 3. BLOCCO: alla prima pagina di blocco del firewall il giro si ferma e il bot non fa richieste
    ad ANAS per BLOCK_PAUSE_MINUTES. Insistere durante la quarantena la allunga soltanto.
-4. LETTURA COMPLETA a rotazione (una struttura per intero): disponibile ma spenta
-   (LISTING_FULL_PER_RUN=0), costa decine di richieste.
+4. BUDGET ORARIO: le richieste si contano per ora scorrevole, attraverso i giri (anas/budget.py):
+   se l'ora è già piena il giro aspetta o finisce, così due giri accodati non la riempiono due volte.
 
 Niente ordinanze vecchie: alla prima lettura di una struttura le ordinanze trovate vengono solo
 segnate come viste (e si fissa l'ID "spartiacque": sotto è tutto vecchio), tranne quelle che
@@ -37,10 +40,10 @@ import time
 from dataclasses import dataclass, field
 from datetime import date
 
+from .anas.budget import BudgetExhausted
 from .anas.client import BlockedError, TransientError
 from .anas.listing import (
     ITALY,
-    MAX_RESULTS,
     ListingClient,
     ListingError,
     Structure,
@@ -67,7 +70,6 @@ _INHERITED = ("category", "roads", "road_names", "km_from", "km_to", "provinces"
 @dataclass
 class ListingResult:
     structures: list[str] = field(default_factory=list)
-    full: list[str] = field(default_factory=list)
     requests: int = 0
     seen: int = 0
     new: int = 0
@@ -79,6 +81,7 @@ class ListingResult:
     max_id: int = 0  # numero più alto visto: tiene vicino al presente il canale a numeri di riserva
     deferred: int = 0  # ordinanze rimandate al giro dopo perché il tetto dei PDF era esaurito
     skipped: list[str] = field(default_factory=list)  # strutture saltate per un errore di rete
+    national_off: list[str] = field(default_factory=list)  # ricerche nazionali spente oggi (sforano i 1.000)
     error: str = ""
     broken: bool = False  # il formato dell'elenco è cambiato
     blocked: bool = False  # il firewall ci ha bloccati (o siamo ancora in pausa dopo un blocco)
@@ -113,16 +116,6 @@ class ListingPoller:
         self.db.set("listing_structures_day", today.isoformat())
         log.info("Strutture territoriali nell'elenco: %s", ", ".join(s.code for s in found))
         return found
-
-    def _next_full(self, structures: list[Structure]) -> list[Structure]:
-        """Le prossime strutture da leggere per intero (il turno avanza solo quando la lettura riesce)."""
-        n = max(0, min(self.cfg.listing_full_per_run, len(structures)))
-        start = int(self.db.get("listing_rr", "0") or 0) % len(structures)
-        return [structures[(start + i) % len(structures)] for i in range(n)]
-
-    def _advance_full(self, structures: list[Structure]) -> None:
-        start = int(self.db.get("listing_rr", "0") or 0)
-        self.db.set("listing_rr", str((start + 1) % len(structures)))
 
     # --- costruzione di un'ordinanza ----------------------------------------------
     @staticmethod
@@ -214,7 +207,7 @@ class ListingPoller:
         new = 0
         for rec in records:
             ord_id = int(rec["ID"])
-            rst = self._record_structure(rec) if st.code == ITALY else st
+            rst = self._record_structure(rec) if st.national else st
             if ord_id in known:
                 if not baseline:  # il canale a numeri l'aveva scartata? l'elenco può correggerla
                     o = record_to_ordinanza(rec, rst.label, self.source.url_for(ord_id))
@@ -261,8 +254,8 @@ class ListingPoller:
         self.pdf_budget = self.cfg.max_pdf_per_run
         try:
             self._fast_structures(today, installed, res, late)
-            if self.cfg.listing_full_per_run > 0 and not late():
-                self._full_rotation(today, installed, res)
+        except BudgetExhausted as exc:
+            log.info("Elenco: %s", exc)  # non è un errore: il tetto orario ha fatto il suo lavoro
         except BlockedError as exc:
             pause = self.cfg.block_pause_minutes * 60
             self.db.set(BLOCKED_UNTIL, str(now + pause))
@@ -292,19 +285,31 @@ class ListingPoller:
         off = int(self.db.get("listing_fast_rr", "0") or 0) % n
         k = min(self.cfg.listing_structures_per_run, n)
         done, streak, failed = 0, 0, []
+        # le ricerche nazionali per le urgenze vanno a ogni giro, prima della rotazione, senza farla avanzare
+        national = [Structure("NAZ-" + key, label, causa, dett, national=True)
+                    for key, causa, dett, label in self.cfg.national()
+                    if self.db.get(f"listing_nat_off_NAZ-{key}") != today.isoformat()]
         try:
-            for st in [structures[(off + i) % n] for i in range(k)]:
+            for st in national + [structures[(off + i) % n] for i in range(k)]:
                 if late():
                     log.info("Elenco: tempo del giro finito, %s e seguenti al prossimo giro", st.code)
                     break
                 try:
                     self._fast_structure(st, today, installed, res)
-                except BlockedError:
+                except (BlockedError, BudgetExhausted):
                     raise
+                except ListingError as exc:
+                    if not st.national:
+                        raise
+                    # la ricerca nazionale sfora i 1.000 risultati (o ha cambiato forma): spenta per oggi
+                    self.db.set(f"listing_nat_off_{st.code}", today.isoformat())
+                    res.national_off.append(f"{st.label}: {exc}")
+                    log.warning("Ricerca nazionale %s spenta per oggi: %s", st.label, exc)
+                    continue
                 except TransientError as exc:
                     # rete o sito in errore su questa struttura: si passa alla successiva; se capita
                     # due volte di fila il sito sta rifiutando tutto e si chiude il giro (riprova all'ora dopo)
-                    done += 1
+                    done += 0 if st.national else 1
                     streak += 1
                     failed.append(st.code)
                     log.warning("Elenco: struttura %s saltata in questo giro: %s", st.code, exc)
@@ -313,7 +318,7 @@ class ListingPoller:
                         # richiesta dell'ora), non un guasto di rete: stessa pausa di un blocco
                         raise BlockedError(f"il sito chiude le connessioni ({', '.join(failed)}): {exc}") from exc
                     continue
-                done += 1
+                done += 0 if st.national else 1
                 streak = 0
                 if self.after_structure:
                     self.after_structure()  # i messaggi partono subito, non alla fine dell'ora
@@ -328,13 +333,13 @@ class ListingPoller:
         carry_key = f"listing_fast_carry_{st.code}"
         carry = 0 if baseline else min(MAX_CARRY_PAGES, int(self.db.get(carry_key, "0") or 0))
         min_pages = max(self.cfg.listing_fast_pages_min, carry + 1)
-        if getattr(self, "deep", False):
+        if getattr(self, "deep", False) and not st.national:
             min_pages = max(min_pages, self.cfg.listing_deep_pages)
         max_pages = max(min_pages, self.cfg.listing_fast_pages_max + carry)
         page, pages, new, max_id = 1, 1, 0, 0
         seen0, new0 = res.seen, res.new
         while page <= min(pages, max_pages):
-            body = self.listing.search_page(st.code, today, page)
+            body = self.listing.search_page(st.area, today, page, causa=st.causa, causa_dett=st.causa_dett)
             res.requests += 1
             pages = int(body.get("tot_pagine") or 0)
             results = body.get("results") or []
@@ -354,28 +359,9 @@ class ListingPoller:
                  " (presa visione)" if baseline else "",
                  getattr(getattr(self.listing, "anas", None), "requests_made", 0))
         self.db.set(carry_key, str(max_pages if still_new else 0))
-        if baseline and max_id > 0:
+        if baseline:
+            # anche una struttura vuota è "vista" (spartiacque 0: la sua prima ordinanza futura è nuova);
+            # il caso "il sito dichiara N ordinanze ma non le elenca" è già escluso sopra con ListingError
             self.db.set(f"listing_done_{st.code}", today.isoformat())
             self.db.set(f"listing_watermark_{st.code}", str(max_id))
         res.structures.append(st.code)
-
-    def _full_rotation(self, today: date, installed: str, res: ListingResult) -> None:
-        """Lettura completa di una struttura a rotazione (rete di sicurezza, spenta di default:
-        una struttura sono 30-60 richieste). Un turno ogni LISTING_FULL_EVERY_RUNS giri."""
-        tick = int(self.db.get("listing_full_tick", "0") or 0)
-        self.db.set("listing_full_tick", str(tick + 1))
-        if tick % self.cfg.listing_full_every_runs != 0:
-            return
-        structures = self.structures(today)
-        for st in self._next_full(structures):
-            baseline = self.db.get(f"listing_done_{st.code}") is None
-            self.watermark = int(self.db.get(f"listing_watermark_{st.code}", "0") or 0)
-            records = list(self.listing.iter_structure(st.code, today))
-            res.requests += max(1, (len(records) + 4) // 5)
-            if getattr(self.listing, "last_total_records", 0) >= MAX_RESULTS:
-                raise ListingError(f"la struttura {st.code} supera i {MAX_RESULTS} risultati: "
-                                   "l'elenco sarebbe incompleto, serve dividere la ricerca")
-            self._handle_page(records, st, baseline, installed, res)
-            self.db.set(f"listing_done_{st.code}", today.isoformat())
-            self._advance_full(structures)
-            res.full.append(st.code)

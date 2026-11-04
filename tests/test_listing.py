@@ -152,9 +152,11 @@ class FakeListing:
             i += 1
         return out
 
-    def search_page(self, code, day, page):
+    def search_page(self, code, day, page, causa="*", causa_dett="*"):
         self.calls.append((code, page))
         recs = self._italy() if code == ITALY else self.pages[code]
+        if causa != "*":
+            recs = [r for r in recs if r.get("CAUSA") == causa]
         return {"tot_pagine": (len(recs) + 4) // 5, "tot_record": len(recs),
                 "results": copy.deepcopy(recs[(page - 1) * 5: page * 5])}
 
@@ -205,21 +207,6 @@ def test_fast_scan_reads_few_pages_when_nothing_is_new(env):
     p.run(date(2026, 11, 2))
     fast = [c for c in listing.calls if c[1] > 0]
     assert fast == [("BA", 1), ("MI", 1)]               # niente di nuovo: solo la prima pagina
-
-
-def test_new_closure_deep_in_list_is_found_by_full_rotation(env):
-    cfg, db, listing, src = env
-    cfg.listing_full_per_run = 1  # rete di sicurezza, spenta di default
-    p = ListingPoller(db, listing, src, cfg)
-    _install(p, listing)
-    listing.pages["BA"].append(_closure(212500, "03/11/2026"))   # in fondo alla lista (pagina 4)
-    full_runs = []
-    for _ in range(8):  # finita l'installazione, una lettura completa ogni 4 giri
-        listing.calls.clear()
-        p.run(date(2026, 11, 2))
-        full_runs.append(any(c[1] == 0 for c in listing.calls))
-    assert full_runs.count(True) == 2
-    assert [o.ord_id for o in db.pending_ordinanze()] == [212500]
 
 
 def test_closure_starting_from_install_day_is_notified_during_first_scan(env):
@@ -320,8 +307,8 @@ def test_firewall_block_stops_the_run_and_pauses_the_bot(env):
     _install(p, listing)
     real = listing.search_page
 
-    def blocked(code, day, page):
-        real(code, day, page)
+    def blocked(code, day, page, **kw):
+        real(code, day, page, **kw)
         raise BlockedError("firewall ANAS: ricerca * bloccata")
     listing.search_page = blocked
     listing.calls.clear()
@@ -421,8 +408,8 @@ def test_search_that_refuses_to_list_raises_listing_error(env):
     """Il sito oltre 1.000 risultati risponde esito=false e nessun elenco: errore chiaro, non "zero novità"."""
     cfg, db, listing, src = env
     p = ListingPoller(db, listing, src, cfg)
-    listing.search_page = lambda code, day, page: {"esito": False, "tot_pagine": 0, "tot_record": 3911, "results": [],
-                                                   "messaggio": "E' stato ragginto il limite massimo"}
+    listing.search_page = lambda code, day, page, **kw: {"esito": False, "tot_pagine": 0, "tot_record": 3911,
+                                                         "results": [], "messaggio": "E' stato ragginto il limite massimo"}
     r = p.run(date(2026, 11, 2))
     assert r.broken and "3911" in r.error and db.get("listing_done_BA") is None
 
@@ -471,10 +458,10 @@ def test_one_structure_in_error_does_not_stop_the_others(env):
     _install(p, listing)
     real = listing.search_page
 
-    def flaky(code, day, page):
+    def flaky(code, day, page, **kw):
         if code == "BA":
             raise TransientError("elenco BA: connection reset")
-        return real(code, day, page)
+        return real(code, day, page, **kw)
     listing.search_page = flaky
     listing.pages["MI"].insert(0, _closure(212000, "03/11/2026", numero="11/2026/MI"))
     r = p.run(date(2026, 11, 2))
@@ -486,7 +473,7 @@ def test_two_structures_in_error_in_a_row_pause_like_a_block(env):
     cfg, db, listing, src = env
     p = ListingPoller(db, listing, src, cfg)
     _install(p, listing)
-    listing.search_page = lambda code, day, page: (_ for _ in ()).throw(TransientError("reset"))
+    listing.search_page = lambda code, day, page, **kw: (_ for _ in ()).throw(TransientError("reset"))
     r = p.run(date(2026, 11, 2), now=1000.0)
     assert r.blocked and r.block_started and r.skipped == ["BA", "MI"]   # come un blocco: pausa di un'ora
     assert float(db.get("anas_blocked_until")) == 1000.0 + cfg.block_pause_minutes * 60
@@ -526,3 +513,106 @@ def test_access_closure_names_what_is_closed():
     o = record_to_ordinanza(rec, "Perugia", "u")
     assert o.category == CLOSURE and o.ramp_only and o.access_kind == "svincolo"
     assert title_line(o).startswith("↪️⛔ *SVINCOLO CHIUSO*")
+
+
+def test_structure_empty_at_install_notifies_its_first_future_ordinance(env):
+    """MI è vuota alla presa visione: la sua prima ordinanza, anche con inizio prima dell'installazione, è nuova."""
+    cfg, db, listing, src = env
+    listing.pages["MI"] = []
+    p = ListingPoller(db, listing, src, cfg)
+    _install(p, listing)
+    assert db.get("listing_done_MI") and db.get("listing_watermark_MI") == "0"
+    listing.pages["MI"].insert(0, _closure(212000, "20/10/2026", numero="11/2026/MI"))
+    r = p.run(date(2026, 11, 2))
+    assert r.relevant == 1 and [o.ord_id for o in db.pending_ordinanze()] == [212000]
+
+
+def test_hourly_ledger_waits_and_then_gives_up(tmp_path):
+    """Il tetto orario vale attraverso i giri: con 3 richieste nell'ultima ora la 4ª aspetta, o rinuncia."""
+    from anas_bot.anas.budget import BudgetExhausted, RequestLedger
+    db = Database.local(str(tmp_path / "b.sqlite3"))
+    clock = {"t": 0.0}
+    slept = []
+
+    def sleep(seconds):
+        slept.append(seconds)
+        clock["t"] += seconds
+
+    led = RequestLedger(db, max_per_hour=3, max_wait=900, now=lambda: clock["t"], sleep=sleep)
+    for t in (0, 60, 120):
+        clock["t"] = t
+        led.before_request()
+    clock["t"] = 3000                      # 50 minuti dopo, "giro successivo": la più vecchia esce tra 10 minuti
+    led.before_request()
+    assert slept and 600 <= slept[0] <= 602 and led.in_last_hour() == 3   # ha aspettato, poi registrato
+    clock["t"] = 3605                      # nell'ora: 60, 120, 3601 -> servirebbero 55 s, più del massimo: rinuncia
+    strict = RequestLedger(db, max_per_hour=3, max_wait=30, now=lambda: clock["t"], sleep=sleep)
+    with pytest.raises(BudgetExhausted):
+        strict.before_request()
+
+
+def test_browser_like_fetches_same_site_assets_only():
+    from anas_bot.anas import listing as L
+
+    class Sess:
+        def __init__(self):
+            self.got = []
+        def get(self, url, **kw):
+            self.got.append(url)
+            return type("R", (), {"status_code": 200, "headers": {}, "text": ""})()
+    calls = {"n": 0}
+    anas = type("Anas", (), {"timeout": 1, "robots": L.RobotsPolicy.allow_all("x"), "session": Sess(),
+                             "_throttle": lambda self: calls.__setitem__("n", calls["n"] + 1)})()
+    lc = L.ListingClient(anas)
+    page = ('<link rel="stylesheet" href="/css/a.css"><script src="https://www.stradeanas.it/js/b.js"></script>'
+            '<script src="https://cdn.altro.it/x.js"></script><link rel="stylesheet" href="//www.stradeanas.it/css/c.css">')
+    lc.browser_like = True
+    lc._fetch_page_assets(page)
+    assert lc.session.got == ["https://www.stradeanas.it/css/a.css", "https://www.stradeanas.it/js/b.js",
+                              "https://www.stradeanas.it/css/c.css"]
+    assert calls["n"] == 3                               # ogni risorsa passa dal freno (e dal budget orario)
+
+
+def test_national_search_runs_every_run_before_the_rotation(env):
+    """Le urgenze in nazionale: la frana di Milano arriva al giro stesso, anche se MI non è di turno."""
+    cfg, db, listing, src = env
+    cfg.national_searches = "FEN=Fenomeni naturali/*/Frane e simili"
+    cfg.listing_structures_per_run = 1  # per giro solo una struttura a rotazione
+    p = ListingPoller(db, listing, src, cfg)
+    p.run(date(2026, 11, 1))  # presa visione: NAZ-FEN e BA
+    frana = _closure(212000, "03/11/2026", numero="11/2026/MI")
+    frana["CAUSA"] = "Fenomeni naturali"
+    listing.pages["MI"].insert(0, frana)
+    listing.calls.clear()
+    r = p.run(date(2026, 11, 2))
+    assert listing.calls[0] == (ITALY, 1)                       # prima la nazionale...
+    assert [c for c in listing.calls if c[0] != ITALY] == [("MI", 1)]  # ...poi la struttura di turno
+    assert r.relevant == 1 and [o.ord_id for o in db.pending_ordinanze()] == [212000]
+    assert db.get("listing_fast_rr") == "0"                     # la nazionale non fa avanzare la rotazione
+
+
+def test_national_search_over_the_cap_is_switched_off_for_the_day(env):
+    cfg, db, listing, src = env
+    cfg.national_searches = "VIA=Gestione della viabilità"
+    real = listing.search_page
+
+    def capped(code, day, page, causa="*", causa_dett="*"):
+        if code == ITALY:
+            return {"esito": False, "tot_pagine": 0, "tot_record": 2024, "results": [], "messaggio": "limite massimo"}
+        return real(code, day, page, causa, causa_dett)
+    listing.search_page = capped
+    p = ListingPoller(db, listing, src, cfg)
+    r = p.run(date(2026, 11, 2))
+    assert r.national_off and "2024" in r.national_off[0] and not r.error
+    assert db.get("listing_nat_off_NAZ-VIA") == "2026-11-02"
+    listing.calls.clear()
+    p.run(date(2026, 11, 2))
+    assert all(c[0] != ITALY for c in listing.calls)            # per oggi non la riprova
+
+
+def test_national_searches_config_parsing():
+    cfg = Config()
+    cfg.national_searches = "FEN=Fenomeni naturali;EMER=*/Ripristino viabilità per emergenze/Emergenze; x=a/b"
+    assert cfg.national() == [("FEN", "Fenomeni naturali", "*", "FEN"),
+                              ("EMER", "*", "Ripristino viabilità per emergenze", "Emergenze"),
+                              ("X", "a", "b", "x")]
