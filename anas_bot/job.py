@@ -72,8 +72,10 @@ def admin(client, cfg: Config, text: str) -> None:
         log.warning("Messaggio admin non inviato, Slack non raggiungibile: %s", exc)
 
 
-def run(cfg: Config, db: Database, client, source, listing=None) -> int:
-    started = time.monotonic()
+def run(cfg: Config, db: Database, client, source, listing=None, started: float | None = None) -> int:
+    """started: time.monotonic() dell'avvio del job (main): il tempo del giro conta da lì, anche se prima
+    si è aspettata la fine di una pausa."""
+    started = time.monotonic() if started is None else started
     budget = cfg.job_time_budget_minutes * 60
     local_now = datetime.now(ZoneInfo(cfg.timezone))
     today = local_now.date()
@@ -234,6 +236,7 @@ def _block_alert(db: Database, client, cfg: Config, error: str) -> None:
 def main() -> int:
     logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"),
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    started = time.monotonic()
     cfg = Config.from_env()
     errors = cfg.validate()
     if errors:
@@ -241,6 +244,9 @@ def main() -> int:
             log.error(e)
         return 2
     db = open_database(cfg)
+    if not fallback_run_is_needed(db, os.environ.get("RUN_TRIGGER", "")):
+        return 0
+    db.set("last_run_started_at", str(time.time()))
     client = build_web_client(cfg.slack_bot_token)
     anas = AnasClient(cfg.anas_pdf_url, cfg.anas_user_agent, cfg.request_delay_seconds)
     anas.ledger = RequestLedger(db, cfg.max_requests_per_hour)
@@ -264,7 +270,20 @@ def main() -> int:
         except TransientError as exc:
             log.warning("ANAS non raggiungibile né direttamente né dal ponte del Worker: %s", exc)
     source = PdfSource(anas, pdf_to_text)
-    return run(cfg, db, client, source, listing)
+    return run(cfg, db, client, source, listing, started)
+
+
+def fallback_run_is_needed(db: Database, trigger: str, now=time.time, max_age_minutes: int = 100) -> bool:
+    """La pianificazione di riserva del workflow (ogni 3 ore) serve solo se l'orologio del Worker non ha
+    fatto partire giri di recente: altrimenti si accoderebbe un secondo giro nella stessa ora, che
+    troverebbe il budget orario pieno e sposterebbe in avanti quello vero."""
+    if trigger != "schedule":
+        return True
+    last = float(db.get("last_run_started_at", "0") or 0)
+    if now() - last < max_age_minutes * 60:
+        log.info("Giro di riserva non necessario: l'ultimo giro è partito %d minuti fa", int((now() - last) / 60))
+        return False
+    return True
 
 
 def wait_for_pause(db: Database, cfg: Config, now=time.time, sleep=time.sleep) -> bool:

@@ -19,7 +19,7 @@ permissions:
 jobs:
   run:
     runs-on: ubuntu-24.04
-    timeout-minutes: 70  # il giro dura ~50 minuti (JOB_TIME_BUDGET_MINUTES) più l'ultima richiesta
+    timeout-minutes: 75  # il giro dura ~50 minuti (JOB_TIME_BUDGET_MINUTES) più l'attesa del budget orario (max 15) e l'ultima richiesta
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
@@ -30,6 +30,9 @@ jobs:
       - name: Giro ANAS -> Slack
         run: python -m anas_bot.job
         env:
+          # "schedule" = pianificazione di riserva (ogni 3 ore): il job la ignora se l'orologio del Worker
+          # ha già fatto partire un giro da poco, per non accodare due giri nella stessa ora
+          RUN_TRIGGER: ${{ github.event_name }}
           # Secrets (Settings -> Secrets and variables -> Actions -> Secrets)
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
           # facoltativo: token di un altro workspace per il solo canale admin (es. quello di test)

@@ -192,6 +192,15 @@ def test_block_at_the_first_page_pauses_the_bot_and_alerts(cfg, monkeypatch):
     assert any("🧱" in p["text"] for p in slack.posts)
 
 
+def test_fallback_schedule_runs_only_if_the_worker_clock_is_silent():
+    db = Database.local(":memory:")
+    assert job.fallback_run_is_needed(db, "schedule", now=lambda: 10_000.0)        # mai partito: serve
+    db.set("last_run_started_at", "9000")                                          # 17 minuti fa
+    assert not job.fallback_run_is_needed(db, "schedule", now=lambda: 10_000.0)    # il Worker lavora: no
+    assert job.fallback_run_is_needed(db, "workflow_dispatch", now=lambda: 10_000.0)  # avvio manuale/Worker: sempre
+    assert job.fallback_run_is_needed(db, "schedule", now=lambda: 9000 + 101 * 60)  # da 101 minuti: serve
+
+
 def test_pause_ending_during_the_run_is_waited_out(cfg):
     from anas_bot.listing_poller import BLOCKED_UNTIL
     db = Database.local(":memory:")

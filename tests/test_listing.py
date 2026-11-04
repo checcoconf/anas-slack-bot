@@ -483,6 +483,27 @@ def test_night_deep_read_finds_new_closure_below_first_page(env):
     assert db.get("listing_fast_carry_BA") == "0"                  # la profondità notturna non lascia "carry"
 
 
+def test_deadline_stops_the_structure_after_the_first_page(env, monkeypatch):
+    """Tempo del giro finito a metà struttura: la prima pagina si legge sempre, le altre al giro dopo.
+    (Senza questo freno una lettura profonda iniziata al limite sforava il timeout di GitHub.)"""
+    from anas_bot import listing_poller as LP
+    cfg, db, listing, src = env
+    p = ListingPoller(db, listing, src, cfg)
+    _install(p, listing)
+    clock = {"t": 0.0}
+    monkeypatch.setattr(LP.time, "monotonic", lambda: clock["t"])
+    real = listing.search_page
+
+    def slow(code, day, page, **kw):
+        clock["t"] += 400.0                       # ogni richiesta "costa" 400 s
+        return real(code, day, page, **kw)
+    listing.search_page = slow
+    listing.calls.clear()
+    r = p.run(date(2026, 11, 3), hour=3, deadline=300.0)   # di notte (4 pagine), ma il tempo finisce dopo la prima
+    assert [c[1] for c in listing.calls if c[0] == "BA"] == [1] and not r.error
+    assert r.structures == ["BA"]                           # le altre strutture al giro dopo
+
+
 def test_deep_hours_parsing():
     cfg = Config()
     cfg.listing_deep_hours = "0-6"

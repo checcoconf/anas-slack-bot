@@ -239,6 +239,7 @@ class ListingPoller:
         if self.deep:
             log.info("Elenco: lettura profonda notturna, %d pagine per struttura", self.cfg.listing_deep_pages)
         late = lambda: deadline is not None and time.monotonic() > deadline  # noqa: E731
+        self._late = late
         installed = self.db.get("installed_on")
         if not installed:
             installed = today.isoformat()
@@ -340,6 +341,8 @@ class ListingPoller:
         page, pages, new, max_id = 1, 1, 0, 0
         seen0, new0 = res.seen, res.new
         while page <= min(pages, max_pages):
+            if page > 1 and getattr(self, "_late", lambda: False)():
+                break  # tempo del giro finito: la prima pagina si legge sempre, le altre al giro dopo (carry)
             body = self.listing.search_page(st.area, today, page, causa=st.causa, causa_dett=st.causa_dett)
             res.requests += 1
             pages = int(body.get("tot_pagine") or 0)
