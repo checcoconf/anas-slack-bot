@@ -24,7 +24,7 @@
 
   // Valori di riserva: il workflow li sovrascrive con la variable SLACK_CHANNEL_IDS e il nome della repo.
   "vars": {
-    "SLACK_CHANNEL_IDS": "C0123ABCD",
+    "SLACK_CHANNEL_IDS": "",  // vuoto = modalità solo app
     "GITHUB_REPO": "tuo-utente/anas-slack-bot",
     "GITHUB_WORKFLOW": "anas.yml",
     "GITHUB_REF": "main"

@@ -32,11 +32,13 @@ jobs:
         env:
           # Secrets (Settings -> Secrets and variables -> Actions -> Secrets)
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          # facoltativo: token di un altro workspace per il solo canale admin (es. quello di test)
+          ADMIN_SLACK_BOT_TOKEN: ${{ secrets.ADMIN_SLACK_BOT_TOKEN }}
           CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
           CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
           CF_D1_DATABASE_ID: ${{ secrets.CF_D1_DATABASE_ID }}
           # Variables (stessa pagina -> Variables)
-          SLACK_CHANNEL_IDS: ${{ vars.SLACK_CHANNEL_IDS }}
+          SLACK_CHANNEL_IDS: ${{ vars.SLACK_CHANNEL_IDS }}  # vuota = modalità solo app (iscrizione dalla Home)
           ADMIN_CHANNEL_ID: ${{ vars.ADMIN_CHANNEL_ID }}
           ANAS_START_ID: ${{ vars.ANAS_START_ID }}
           ANAS_USER_AGENT: ${{ vars.ANAS_USER_AGENT }}
@@ -51,7 +53,7 @@ jobs:
           REQUEST_DELAY_SECONDS: ${{ vars.REQUEST_DELAY_SECONDS }}
           MAX_PDF_PER_RUN: ${{ vars.MAX_PDF_PER_RUN }}
           MAX_REQUESTS_PER_HOUR: ${{ vars.MAX_REQUESTS_PER_HOUR }}
-          BROWSER_LIKE: ${{ vars.BROWSER_LIKE }}
+          CHANNEL_SUBSCRIPTIONS: ${{ vars.CHANNEL_SUBSCRIPTIONS }}
           NATIONAL_SEARCHES: ${{ vars.NATIONAL_SEARCHES }}
           BLOCK_PAUSE_MINUTES: ${{ vars.BLOCK_PAUSE_MINUTES }}
           JOB_TIME_BUDGET_MINUTES: ${{ vars.JOB_TIME_BUDGET_MINUTES }}

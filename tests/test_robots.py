@@ -103,12 +103,22 @@ def test_load_robots_allows_real_site_then_search_proceeds():
 
 
 def test_blocked_site_5xx_makes_bot_stand_down():
-    """Il blocco del firewall arriva come HTTP 500: il bot non deve interrogare nulla in quel giro."""
-    lc, anas = _client({"robots.txt": _Resp(500, "Web Page Blocked")})
+    """Sito in errore (HTTP 500 vero): il bot non deve interrogare nulla in quel giro."""
+    lc, anas = _client({"robots.txt": _Resp(500, "Errore interno del server")})
     lc.load_robots()
     assert anas.robots.allowed(SEARCH_URL) is False
     with pytest.raises(TransientError):
         lc.search_page("BA", date(2026, 11, 2), 1)
+
+
+def test_block_page_on_robots_is_a_firewall_block_whatever_the_status():
+    """La pagina di blocco del firewall, con qualunque codice HTTP, è un blocco: pausa, non "sito in errore"."""
+    from anas_bot.anas.client import BlockedError
+    for status in (403, 500, 503):
+        lc, anas = _client({"robots.txt": _Resp(status, "<h1>Web Page Blocked!</h1> Attack ID 20000046")})
+        with pytest.raises(BlockedError):
+            lc.load_robots()
+        assert anas.robots.allowed(SEARCH_URL) is False
 
 
 def test_robots_disallowing_ordinances_is_respected():

@@ -25,7 +25,7 @@ from slack_sdk.errors import SlackApiError
 
 from . import __version__
 from .anas.budget import RequestLedger
-from .anas.client import AnasClient, TransientError
+from .anas.client import AnasClient, BlockedError, TransientError
 from .anas.listing import ListingClient
 from .anas.pdftext import pdf_to_text
 from .anas.relay import choose_route
@@ -33,7 +33,8 @@ from .anas.robots import RobotsPolicy
 from .config import Config
 from .db import D1Http, Database, LocalSqlite, schema_statements
 from .membership import Membership, build_web_client
-from .notifier import Notifier
+from .digest import Digest
+from .notifier import Notifier, channel_subscribers
 from .listing_poller import BLOCKED_UNTIL, ListingPoller
 from .poller import PdfSource, Poller
 
@@ -51,13 +52,24 @@ def open_database(cfg: Config) -> Database:
     return Database(LocalSqlite(cfg.local_db_path))
 
 
+_admin_client = None
+
+
 def admin(client, cfg: Config, text: str) -> None:
+    """Avviso nel canale admin. Con ADMIN_SLACK_BOT_TOKEN il canale può stare in un altro workspace."""
+    global _admin_client
     if not cfg.admin_channel_id:
         return
+    if cfg.admin_slack_bot_token:
+        if _admin_client is None:
+            _admin_client = build_web_client(cfg.admin_slack_bot_token)
+        client = _admin_client
     try:
         client.chat_postMessage(channel=cfg.admin_channel_id, text=text)
     except SlackApiError as exc:
         log.warning("Messaggio admin non inviato: %s", exc.response.get("error") if exc.response else exc)
+    except OSError as exc:  # Slack non raggiungibile (dopo i ritentativi dell'SDK): un avviso perso non ferma il giro
+        log.warning("Messaggio admin non inviato, Slack non raggiungibile: %s", exc)
 
 
 def run(cfg: Config, db: Database, client, source, listing=None) -> int:
@@ -67,13 +79,28 @@ def run(cfg: Config, db: Database, client, source, listing=None) -> int:
     today = local_now.date()
 
     first_ever = db.get("reconciled_once") is None
-    welcomed, left = Membership(db, client, cfg).reconcile(first_run=first_ever)
+    try:
+        welcomed, left = Membership(db, client, cfg).reconcile(first_run=first_ever)
+    except OSError as exc:  # Slack non raggiungibile: il canale si riallinea al giro dopo, ANAS si legge lo stesso
+        log.warning("Canale non riallineato, Slack non raggiungibile: %s", exc)
+        welcomed = left = 0
     db.set("reconciled_once", "1")
     log.info("Canale: %d benvenuti, %d uscite", welcomed, left)
 
-    notifier = Notifier(db, client, cfg.unknown_province_fallback)
+    channels = channel_subscribers(cfg.channel_subscriptions)
+    notifier = Notifier(db, client, cfg.unknown_province_fallback, channels)
     fetched = relevant = sent = users = 0
     error = ""
+    channel_errors: dict[str, str] = {}
+
+    # Riepilogo delle ordinanze in vigore a chi ha appena scelto le zone (prima del giro: non aspetta un'ora)
+    try:
+        digests = Digest(db, client, cfg.unknown_province_fallback).run(today)
+    except OSError as exc:
+        log.warning("Riepiloghi rimandati, Slack non raggiungibile: %s", exc)
+        digests = 0
+    if digests:
+        log.info("Riepilogo delle ordinanze in vigore mandato a %d iscritti", digests)
 
     # 1) Elenco ufficiale di Ordinanze Web: la fonte principale
     lres = None
@@ -83,6 +110,7 @@ def run(cfg: Config, db: Database, client, source, listing=None) -> int:
             nres = notifier.run(today)
             sent += nres.messages_sent
             users += nres.users_notified
+            channel_errors.update(nres.channel_errors)
         poller = ListingPoller(db, listing, source, cfg)
         poller.after_structure = flush
         lres = poller.run(today, deadline=started + budget, hour=local_now.hour)
@@ -109,6 +137,7 @@ def run(cfg: Config, db: Database, client, source, listing=None) -> int:
             relevant += pres.relevant
             sent += nres.messages_sent
             users += nres.users_notified
+            channel_errors.update(nres.channel_errors)
             error = pres.error
             if not pres.more_pending or time.monotonic() - started > budget:
                 break
@@ -118,6 +147,11 @@ def run(cfg: Config, db: Database, client, source, listing=None) -> int:
              fetched, relevant, sent, users, db.cursor(), f", errore ANAS: {error}" if error else "")
 
     # Avvisi tecnici nel canale admin
+    for chan, err in channel_errors.items():
+        if db.get(f"channel_alerted:{chan}") != err:  # una volta per errore, non a ogni giro
+            admin(client, cfg, f"⚠️ Non riesco a scrivere nel canale iscritto {chan} ({err}): "
+                               "invita il bot nel canale (/invite @anas-bot) o togli il canale da CHANNEL_SUBSCRIPTIONS.")
+            db.set(f"channel_alerted:{chan}", err)
     failed = int(db.get("anas_failed_runs", "0") or 0)
     if error:
         failed += 1
@@ -160,11 +194,7 @@ def _listing_alerts(db: Database, client, cfg: Config, lres) -> None:
     db.set("listing_failed_runs", str(lfailed))
 
     if lres.block_started:
-        blocks = int(db.get("anas_blocks_total", "0") or 0) + 1
-        db.set("anas_blocks_total", str(blocks))
-        admin(client, cfg, f"🧱 Il firewall di ANAS ci ha bloccati (blocco n. {blocks}): {lres.error}. "
-                           f"Nessuna richiesta per {cfg.block_pause_minutes} minuti, poi si riprende da soli. "
-                           "Se succede spesso, alza REQUEST_DELAY_SECONDS o abbassa MAX_PDF_PER_RUN.")
+        _block_alert(db, client, cfg, lres.error)
 
     if lres.unknown:
         already = set(json.loads(db.get("alerted_measures", "[]") or "[]"))
@@ -192,6 +222,15 @@ def _listing_alerts(db: Database, client, cfg: Config, lres) -> None:
             db.set("alerted_uncertain", json.dumps(sorted(already | set(fresh)), ensure_ascii=False))
 
 
+def _block_alert(db: Database, client, cfg: Config, error: str) -> None:
+    blocks = int(db.get("anas_blocks_total", "0") or 0) + 1
+    db.set("anas_blocks_total", str(blocks))
+    admin(client, cfg, f"🧱 Il firewall di ANAS ci ha bloccati (blocco n. {blocks}): {error}. "
+                       f"Nessuna richiesta per {cfg.block_pause_minutes} minuti, poi si riprende da soli. "
+                       f"Richieste ad ANAS nell'ultima ora: {RequestLedger(db, 0).in_last_hour()}, "
+                       f"tetto MAX_REQUESTS_PER_HOUR={cfg.max_requests_per_hour}. Se si ripete, abbassa il tetto di una tacca.")
+
+
 def main() -> int:
     logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"),
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -209,7 +248,6 @@ def main() -> int:
     if cfg.anas_bot_key:
         anas.session.headers["X-Waze-Bot-Key"] = cfg.anas_bot_key  # se ANAS ci riconosce da questo codice
     listing = ListingClient(anas)
-    listing.browser_like = cfg.browser_like
     blocked_until = float(db.get(BLOCKED_UNTIL, "0") or 0)
     if blocked_until > time.time():
         log.warning("In pausa dopo un blocco del firewall ANAS: nessuna richiesta in questo giro")
@@ -218,6 +256,12 @@ def main() -> int:
             route = choose_route(cfg.anas_route, db, anas, cfg.slack_bot_token, listing.prime, cfg.worker_url)
             log.info("Collegamento ad ANAS: %s", route)
             load_robots_cached(db, listing)  # da crawler educato: rispetta robots.txt e crawl-delay
+        except BlockedError as exc:
+            # Bloccati già alla prima pagina (o a robots.txt): stessa pausa di un blocco durante il giro,
+            # così il giro non fa altre richieste (ognuna allungherebbe la quarantena)
+            db.set(BLOCKED_UNTIL, str(time.time() + cfg.block_pause_minutes * 60))
+            log.warning("Firewall ANAS: %s. Nessuna richiesta per %d minuti", exc, cfg.block_pause_minutes)
+            _block_alert(db, client, cfg, str(exc))
         except TransientError as exc:
             log.warning("ANAS non raggiungibile né direttamente né dal ponte del Worker: %s", exc)
     source = PdfSource(anas, pdf_to_text)

@@ -20,7 +20,7 @@ from datetime import date
 
 from .anas.parser import CLOSURE, REOPENING, SPEED, Ordinanza
 from .db import User
-from .geo import PROVINCE_BY_CODE, REGIONS, provinces_of_region
+from .geo import MOTORWAYS, MOTORWAYS_LABEL, PROVINCE_BY_CODE, REGIONS, provinces_of_region
 
 MODAL_CALLBACK = "prefs_modal"
 ACTION_OPEN_PREFS = "open_prefs"
@@ -48,7 +48,7 @@ def _txt(s: str) -> dict:
 
 
 def _region_option(code: str) -> dict:
-    return {"text": _txt(REGIONS[code]), "value": code}
+    return {"text": _txt(MOTORWAYS_LABEL if code == MOTORWAYS else REGIONS[code]), "value": code}
 
 
 def _province_option(code: str) -> dict:
@@ -57,7 +57,7 @@ def _province_option(code: str) -> dict:
 
 
 def region_options() -> list[dict]:
-    return [_region_option(c) for c in sorted(REGIONS, key=lambda c: REGIONS[c])]
+    return [_region_option(MOTORWAYS)] + [_region_option(c) for c in sorted(REGIONS, key=lambda c: REGIONS[c])]
 
 
 def province_option_groups() -> list[dict]:
@@ -85,7 +85,7 @@ def preferences_modal(user: User | None) -> dict:
         "placeholder": _txt("Scegli una o più regioni"), "options": region_options(),
     }
     if u.regions:
-        regions_el["initial_options"] = [_region_option(r) for r in u.regions if r in REGIONS]
+        regions_el["initial_options"] = [_region_option(r) for r in u.regions if r in REGIONS or r == MOTORWAYS]
     provinces_el: dict = {
         "type": "multi_static_select", "action_id": A_PROVINCES,
         "placeholder": _txt("Scegli una o più province"), "option_groups": province_option_groups(),
@@ -113,7 +113,7 @@ def preferences_modal(user: User | None) -> dict:
                 "Puoi combinare *regioni intere* e *singole province*."}},
             {"type": "input", "block_id": B_SCOPE, "optional": True, "label": _txt("🌍 Copertura"),
              "element": scope_el},
-            {"type": "input", "block_id": B_REGIONS, "optional": True, "label": _txt("🗺️ Regioni intere"),
+            {"type": "input", "block_id": B_REGIONS, "optional": True, "label": _txt("🗺️ Regioni intere (o tutte le autostrade)"),
              "element": regions_el},
             {"type": "input", "block_id": B_PROVINCES, "optional": True, "label": _txt("📍 Singole province"),
              "element": provinces_el, "hint": _txt("🔍 Scrivi nel menu per cercare, es. \"Cun\" per Cuneo")},
@@ -137,7 +137,7 @@ def welcome_message() -> dict:
                 {"type": "button", "style": "primary", "action_id": ACTION_OPEN_PREFS,
                  "text": _txt("🗺️ Scegli le zone")}]},
             {"type": "context", "elements": [{"type": "mrkdwn", "text":
-                "⚙️ Puoi cambiarle quando vuoi dalla scheda *Home* di questa app o con `/anas`."}]},
+                "⚙️ Puoi cambiarle quando vuoi dalla scheda *Home* di questa app."}]},
         ],
     }
 
@@ -233,6 +233,37 @@ def ordinanza_blocks(o: Ordinanza) -> list[dict]:
 
 
 _SHORT = {CLOSURE: "⛔ chiusura", REOPENING: "✅ apertura", SPEED: "🚦 limite"}
+
+
+ORDINANZE_WEB_URL = "https://www.stradeanas.it/it/ordinanze-web"
+
+
+def digest_messages(ords: list[Ordinanza], total: int, per_message: int = 15) -> list[tuple[dict, list[int]]]:
+    """Riepilogo delle ordinanze già in vigore nelle zone appena scelte (ords = le più recenti, total = tutte)."""
+    if not ords:
+        msg = {"text": "📋 Al momento nessuna ordinanza ANAS in vigore nelle tue zone.",
+               "blocks": [{"type": "section", "text": {"type": "mrkdwn", "text":
+                           "📋 *Al momento nessuna ordinanza ANAS in vigore nelle tue zone.* "
+                           "Ti scrivo appena ne esce una."}}]}
+        return [(msg, [])]
+    msgs: list[tuple[dict, list[int]]] = []
+    n = len(ords)
+    parts = (n - 1) // per_message + 1
+    for i in range(0, n, per_message):
+        chunk = ords[i:i + per_message]
+        title = f"📋 {total} ordinanz{'a' if total == 1 else 'e'} ANAS in vigore nelle tue zone"
+        if parts > 1:
+            title += f" ({i // per_message + 1}/{parts})"
+        note = (f"Le {n} più recenti; le altre {total - n} su <{ORDINANZE_WEB_URL}|Ordinanze Web>."
+                if total > n else "Da qui in poi ti scrivo solo le novità.")
+        blocks: list[dict] = [{"type": "header", "text": _txt(title)},
+                              {"type": "context", "elements": [{"type": "mrkdwn", "text": note}]},
+                              {"type": "divider"}]
+        for o in chunk:
+            blocks.extend(ordinanza_blocks(o))
+        summary = "; ".join(f"{_SHORT.get(o.category, o.category)} {' '.join(o.roads[:2])}" for o in chunk)
+        msgs.append(({"text": f"{title}: {summary}"[:3000], "blocks": blocks}, [o.ord_id for o in chunk]))
+    return msgs
 
 
 def notification_messages(ords: list[Ordinanza], per_message: int = 15) -> list[tuple[dict, list[int]]]:

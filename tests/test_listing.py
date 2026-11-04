@@ -143,7 +143,7 @@ class FakeListing:
         self.last_total_records = 0
 
     def structures(self, day=None):
-        return [Structure(c, {"BA": "Puglia", "MI": "Lombardia"}[c]) for c in self.pages]
+        return [Structure(c, {"BA": "Puglia", "MI": "Lombardia", "FI": "Toscana"}[c]) for c in self.pages]
 
     def _italy(self) -> list[dict]:
         out, i = [], 0
@@ -382,6 +382,47 @@ def test_search_retries_once_with_fresh_session_after_http_500():
     assert primes == [1]
 
 
+def test_block_page_on_search_is_recognized_whatever_the_status():
+    """FortiWeb può mandare la pagina di blocco con 403 o 503: non è un "formato cambiato" né un errore di rete."""
+    from anas_bot.anas import listing as L
+    from anas_bot.anas.robots import RobotsPolicy
+
+    class Resp:
+        def __init__(self, status, text):
+            self.status_code, self.text, self.headers = status, text, {}
+
+        def json(self):
+            raise ValueError("non JSON")
+
+    for status in (403, 500, 503):
+        class Session:
+            def post(self, *a, **k):
+                return Resp(status, "<html><h1>Web Page Blocked!</h1><p>Attack ID 20000046</p></html>")
+        lc = L.ListingClient(type("Anas", (), {"timeout": 1, "session": Session(), "_throttle": lambda self: None,
+                                               "robots": RobotsPolicy.allow_all("t")})())
+        lc._primed = True
+        with pytest.raises(BlockedError):
+            lc.search_page("BA", date(2026, 11, 2), 1)
+
+
+def test_prime_is_remembered_only_when_the_page_was_really_read():
+    from anas_bot.anas import listing as L
+    from anas_bot.anas.robots import RobotsPolicy
+
+    class Resp:
+        def __init__(self, status):
+            self.status_code, self.text, self.headers = status, "errore", {}
+
+    class Session:
+        def get(self, *a, **k):
+            return Resp(502)
+    lc = L.ListingClient(type("Anas", (), {"timeout": 1, "session": Session(), "_throttle": lambda self: None,
+                                           "robots": RobotsPolicy.allow_all("t")})())
+    with pytest.raises(TransientError):
+        lc.prime()
+    assert lc._primed is False   # la prossima ricerca riapre la pagina (serve il cookie di sessione)
+
+
 def test_direction_and_readable_excerpt_from_real_ss36_record():
     """Ordinanza reale 1341/2026/MI, arrivata nel primo giro vero (02/11/2026)."""
     riep = ("<p>L'ordinanza sarà applicata alle seguenti tratte:</p><p><strong>SS 36 DEL LAGO DI COMO E DELLO "
@@ -469,14 +510,15 @@ def test_one_structure_in_error_does_not_stop_the_others(env):
     assert [o.ord_id for o in db.pending_ordinanze()] == [212000]   # Milano arriva lo stesso
 
 
-def test_two_structures_in_error_in_a_row_pause_like_a_block(env):
+def test_three_structures_in_error_in_a_row_end_the_run_without_pause(env):
     cfg, db, listing, src = env
+    listing.pages["FI"] = []
     p = ListingPoller(db, listing, src, cfg)
     _install(p, listing)
     listing.search_page = lambda code, day, page, **kw: (_ for _ in ()).throw(TransientError("reset"))
     r = p.run(date(2026, 11, 2), now=1000.0)
-    assert r.blocked and r.block_started and r.skipped == ["BA", "MI"]   # come un blocco: pausa di un'ora
-    assert float(db.get("anas_blocked_until")) == 1000.0 + cfg.block_pause_minutes * 60
+    assert r.error and not r.blocked and r.skipped == ["BA", "MI", "FI"]   # rete giù: si riprova all'ora dopo
+    assert db.get("anas_blocked_until") is None                              # ...senza la pausa da blocco
 
 
 def test_closure_of_a_lay_by_is_not_a_road_closure():
@@ -549,28 +591,6 @@ def test_hourly_ledger_waits_and_then_gives_up(tmp_path):
     strict = RequestLedger(db, max_per_hour=3, max_wait=30, now=lambda: clock["t"], sleep=sleep)
     with pytest.raises(BudgetExhausted):
         strict.before_request()
-
-
-def test_browser_like_fetches_same_site_assets_only():
-    from anas_bot.anas import listing as L
-
-    class Sess:
-        def __init__(self):
-            self.got = []
-        def get(self, url, **kw):
-            self.got.append(url)
-            return type("R", (), {"status_code": 200, "headers": {}, "text": ""})()
-    calls = {"n": 0}
-    anas = type("Anas", (), {"timeout": 1, "robots": L.RobotsPolicy.allow_all("x"), "session": Sess(),
-                             "_throttle": lambda self: calls.__setitem__("n", calls["n"] + 1)})()
-    lc = L.ListingClient(anas)
-    page = ('<link rel="stylesheet" href="/css/a.css"><script src="https://www.stradeanas.it/js/b.js"></script>'
-            '<script src="https://cdn.altro.it/x.js"></script><link rel="stylesheet" href="//www.stradeanas.it/css/c.css">')
-    lc.browser_like = True
-    lc._fetch_page_assets(page)
-    assert lc.session.got == ["https://www.stradeanas.it/css/a.css", "https://www.stradeanas.it/js/b.js",
-                              "https://www.stradeanas.it/css/c.css"]
-    assert calls["n"] == 3                               # ogni risorsa passa dal freno (e dal budget orario)
 
 
 def test_national_search_runs_every_run_before_the_rotation(env):

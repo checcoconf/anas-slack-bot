@@ -43,7 +43,9 @@ def test_full_run_then_resume(tmp_path, cfg, caplog):
     db2 = Database.local(path)
     job.run(cfg, db2, slack, FakeSource({100: s.CLOSURE_SS614, 101: s.MIXED_LANE_AND_CLOSURE}))
     to_u1 = [p for p in slack.posts if p["channel"] == "D-U1"]
-    assert len(to_u1) == 1 and "SS16" in to_u1[0]["text"]
+    # prima il riepilogo di ciò che era già in vigore nelle zone appena scelte (la SS614), poi la novità
+    assert len(to_u1) == 2 and "in vigore" in to_u1[0]["text"] and "SS614" in to_u1[0]["text"]
+    assert "SS16" in to_u1[1]["text"] and "SS614" not in to_u1[1]["text"]
     assert db2.cursor() == 101
     assert not [p for p in slack.posts if p["channel"] == "CADMIN"]  # niente avviso al secondo giro
 
@@ -154,3 +156,48 @@ def test_schema_statements_can_be_repeated():
     stmts = schema_statements()
     assert len(stmts) == 7
     b.batch([(st, ()) for st in stmts])   # seconda volta sulle tabelle già create: nessun errore
+
+
+def test_app_only_mode_keeps_users_subscribed_without_a_channel(tmp_path, cfg):
+    """SLACK_CHANNEL_IDS vuota: nessun riallineamento, chi ha scelto le zone dalla Home resta iscritto."""
+    cfg.channel_ids = []
+    cfg.local_db_path = str(tmp_path / "a.sqlite3")
+    assert not cfg.validate()                                            # il canale non è più obbligatorio
+    db = Database.local(cfg.local_db_path)
+    db.save_preferences("U1", all_italy=True, regions=[], provinces=[], want_closures=True, want_speed=True)
+    slack = FakeSlack(members={})
+    from anas_bot.membership import Membership
+    assert Membership(db, slack, cfg).reconcile(first_run=True) == (0, 0)
+    assert db.get_user("U1").receives
+
+
+def test_block_at_the_first_page_pauses_the_bot_and_alerts(cfg, monkeypatch):
+    """Se già la pagina di prova (o robots.txt) è la pagina di blocco, il giro non deve fare altre richieste."""
+    from anas_bot import job as J
+    from anas_bot.anas.client import BlockedError
+    from anas_bot.listing_poller import BLOCKED_UNTIL
+    db = Database.local(":memory:")
+    cfg.local_db_path, cfg.admin_slack_bot_token = ":memory:", ""
+    slack = FakeSlack(members={})
+    J._admin_client = None
+    monkeypatch.setattr(J, "open_database", lambda c: db)
+    monkeypatch.setattr(J, "build_web_client", lambda token: slack)
+    monkeypatch.setattr(J, "choose_route", lambda *a, **k: (_ for _ in ()).throw(BlockedError("firewall ANAS: pagina bloccata")))
+    monkeypatch.setattr(J, "run", lambda *a, **k: 0)
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
+    monkeypatch.setenv("LOCAL_DB_PATH", ":memory:")
+    monkeypatch.setenv("ADMIN_CHANNEL_ID", "CADMIN")
+    assert J.main() == 0
+    assert float(db.get(BLOCKED_UNTIL)) > 0 and db.get("anas_blocks_total") == "1"
+    assert any("🧱" in p["text"] for p in slack.posts)
+
+
+def test_admin_alerts_can_use_a_second_workspace_token(cfg, monkeypatch):
+    from anas_bot import job as J
+    built = []
+    monkeypatch.setattr(J, "build_web_client", lambda token: built.append(token) or FakeSlack(members={}))
+    J._admin_client = None
+    cfg.admin_channel_id, cfg.admin_slack_bot_token = "CADMIN", "xoxb-altro"
+    main_client = FakeSlack(members={})
+    J.admin(main_client, cfg, "ciao")
+    assert built == ["xoxb-altro"] and not main_client.posts            # non passa dal token principale

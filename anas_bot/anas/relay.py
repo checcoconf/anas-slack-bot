@@ -19,9 +19,8 @@ from typing import Callable
 from urllib.parse import urlsplit
 
 from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
 
-from .client import AnasClient, TransientError
+from .client import RETRY_POLICY, AnasClient, TransientError
 
 log = logging.getLogger(__name__)
 
@@ -54,8 +53,7 @@ class RelayAdapter(HTTPAdapter):
 
 
 def use_relay(anas: AnasClient, worker_url: str, key: str) -> None:
-    retry = Retry(total=2, connect=2, read=2, status=0, backoff_factor=2, allowed_methods=frozenset({"GET"}))
-    anas.session.mount(ANAS_ORIGIN, RelayAdapter(worker_url, key, max_retries=retry))
+    anas.session.mount(ANAS_ORIGIN, RelayAdapter(worker_url, key, max_retries=RETRY_POLICY))
     anas.via = "ponte del Worker"
 
 

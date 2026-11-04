@@ -1,7 +1,7 @@
 // FILE GENERATO da `python -m anas_bot.export_worker`: non modificarlo a mano.
 export default {
  "_nota": "FILE GENERATO da python -m anas_bot.export_worker: non modificarlo a mano",
- "version": "1.0.0",
+ "version": "1.1.0",
  "command": "/anas",
  "ids": {
   "modalCallback": "prefs_modal",
@@ -57,7 +57,7 @@ export default {
     "elements": [
      {
       "type": "mrkdwn",
-      "text": "⚙️ Puoi cambiarle quando vuoi dalla scheda *Home* di questa app o con `/anas`."
+      "text": "⚙️ Puoi cambiarle quando vuoi dalla scheda *Home* di questa app."
      }
     ]
    }
@@ -124,7 +124,7 @@ export default {
     "optional": true,
     "label": {
      "type": "plain_text",
-     "text": "🗺️ Regioni intere",
+     "text": "🗺️ Regioni intere (o tutte le autostrade)",
      "emoji": true
     },
     "element": {
@@ -136,6 +136,14 @@ export default {
       "emoji": true
      },
      "options": [
+      {
+       "text": {
+        "type": "plain_text",
+        "text": "🛣️ Autostrade (tutta Italia)",
+        "emoji": true
+       },
+       "value": "autostrade"
+      },
       {
        "text": {
         "type": "plain_text",
@@ -1457,6 +1465,7 @@ export default {
   ]
  },
  "regions": {
+  "autostrade": "🛣️ Autostrade (tutta Italia)",
   "abruzzo": "Abruzzo",
   "basilicata": "Basilicata",
   "calabria": "Calabria",

@@ -1,11 +1,21 @@
-# Manifest dell'app Slack.
-# 1. Sostituisci TUO-SOTTODOMINIO con il tuo sottodominio workers.dev (Cloudflare -> Workers e Pages),
-#    es. https://anas-slack-bot.mario-rossi.workers.dev
+# Manifest dell'app Slack (modalità "solo app": nessun canale, nessun comando).
+# 1. Sostituisci il sottodominio workers.dev negli URL qui sotto con il tuo (Cloudflare -> Workers e Pages).
 # 2. Su https://api.slack.com/apps -> Create New App -> From a manifest, incolla e crea
-#    (per un'app esistente: la tua app -> "App Manifest", incolla e salva).
+#    (per un'app esistente: la tua app -> "App Manifest", incolla e salva, poi Reinstall).
+# Per usare anche un canale di iscrizione (SLACK_CHANNEL_IDS) servono in più gli scope channels:read,
+# groups:read, users:read e gli eventi member_joined_channel / member_left_channel.
 display_information:
   name: anas-bot
-  description: Chiusure e limiti di velocità dalle ordinanze ANAS, per gli editor Waze Italia
+  description: Avvisi privati su chiusure, riaperture e limiti ANAS nelle zone che scegli tu
+  long_description: >-
+    anas-bot legge le ordinanze pubblicate da ANAS su Ordinanze Web e manda un messaggio privato agli editor
+    Waze Italia che hanno scelto di seguire una o più zone (tutta Italia, regioni o province): chiusure di strade,
+    rampe e svincoli, riaperture e nuovi limiti di velocità permanenti, con strada, chilometri, date e il link
+    al PDF dell'ordinanza. Non scrive in nessun canale e non legge nessun messaggio: per attivarlo basta aprire
+    la scheda Home dell'app e scegliere le zone; per fermarlo, mettere in pausa dalla stessa scheda.
+    I dati ANAS sono pubblici; l'app conserva solo l'ID Slack e le zone scelte da chi la attiva.
+    Sviluppata da Francesco Conforti (checcoconf) per la community Waze Italia.
+    Codice sorgente: https://github.com/checcoconf/anas-slack-bot
   background_color: "#1f3a5f"
 features:
   app_home:
@@ -15,27 +25,15 @@ features:
   bot_user:
     display_name: anas-bot
     always_online: true
-  slash_commands:
-    - command: /anas
-      url: https://anas-slack-bot.francesco-conforti03.workers.dev/slack/commands
-      description: Avvisi chiusure ANAS per Waze — zone, stato, pausa
-      usage_hint: "[stato | pausa | riprendi | aiuto]"
-      should_escape: false
 oauth_config:
   scopes:
     bot:
       - chat:write          # mandare i messaggi privati
       - im:write            # aprire la conversazione privata con un utente
-      - channels:read       # elenco membri di un canale pubblico
-      - groups:read         # elenco membri di un canale privato
-      - users:read          # distinguere persone e bot
-      - commands            # comando /anas
 settings:
   event_subscriptions:
     request_url: https://anas-slack-bot.francesco-conforti03.workers.dev/slack/events
     bot_events:
-      - member_joined_channel
-      - member_left_channel
       - app_home_opened
   interactivity:
     is_enabled: true

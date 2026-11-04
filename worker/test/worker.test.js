@@ -187,12 +187,43 @@ test("pulsante pausa e pulsante PDF", async () => {
   assert.equal(res.status, 200);
 });
 
+test("scheda Messaggi aperta da un nuovo utente: benvenuto una volta sola, mai dopo la configurazione", async () => {
+  await event({ type: "app_home_opened", user: "U9", tab: "messages" });
+  await settle();
+  assert.equal(slackCalls("chat.postMessage").length, 1);
+  assert.match(slackCalls("chat.postMessage")[0].body.text, /Benvenuto|Scegli le zone/);
+  await event({ type: "app_home_opened", user: "U9", tab: "messages" });
+  await settle();
+  assert.equal(slackCalls("chat.postMessage").length, 1);          // già salutato
+  await event({ type: "app_home_opened", user: "B1", tab: "messages" });
+  await settle();
+  assert.equal(slackCalls("chat.postMessage").length, 1);          // un bot non si saluta
+});
+
 test("l'orologio avvia il workflow di GitHub", async () => {
   assert.equal(await dispatchWorkflow(env), 204);
   const c = calls.at(-1);
   assert.equal(c.url, "https://api.github.com/repos/utente/repo/actions/workflows/anas.yml/dispatches");
   assert.deepEqual(c.body, { ref: "main" });
   assert.equal(c.headers.Authorization, "Bearer ghp_test");
+});
+
+test("l'orologio riprova una volta se GitHub non risponde, non per un errore nostro", async () => {
+  const real = globalThis.fetch;
+  let n = 0;
+  globalThis.fetch = async (url, init) => {
+    n++;
+    if (n === 1) throw new TypeError("rete giù");
+    return real(url, init);
+  };
+  const waits = [];
+  assert.equal(await dispatchWorkflow(env, async (ms) => waits.push(ms)), 204);
+  assert.equal(n, 2);
+  assert.deepEqual(waits, [30_000]);
+  n = 0;
+  globalThis.fetch = async () => { n++; return new Response("Bad credentials", { status: 401 }); };
+  assert.equal(await dispatchWorkflow(env, async () => {}), 401);
+  assert.equal(n, 1);                                   // 4xx: riprovare non serve
 });
 
 test("health", async () => {

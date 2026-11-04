@@ -11,7 +11,8 @@ def test_dropdown_limits():
     assert len(groups) == 20 and sum(len(g["options"]) for g in groups) == 110
     assert all(len(g["options"]) <= 100 for g in groups)
     assert all(len(o["text"]["text"]) <= 75 for g in groups for o in g["options"])
-    assert len(views.region_options()) == 20
+    assert len(views.region_options()) == 21  # 20 regioni + "Autostrade (tutta Italia)"
+    assert views.region_options()[0]["value"] == "autostrade"
     sard = next(g for g in groups if g["label"]["text"] == "Sardegna")
     assert "OT" in [o["value"] for o in sard["options"]]
 

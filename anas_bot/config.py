@@ -34,8 +34,17 @@ def _list(name: str) -> list[str]:
 @dataclass
 class Config:
     slack_bot_token: str = ""
+    # Canale "di iscrizione": facoltativo. Vuoto = modalità solo app: gli utenti si iscrivono aprendo la
+    # scheda Home dell'app e scegliendo le zone, senza nessun canale.
     channel_ids: list[str] = field(default_factory=list)
     admin_channel_id: str = ""
+    # Token per gli avvisi admin, se il canale admin sta in un altro workspace (es. quello di test):
+    # vuoto = stesso token del bot.
+    admin_slack_bot_token: str = ""
+    # Canali che ricevono le chiusure e riaperture di certe zone, come se fossero iscritti:
+    # "CANALE=zona,zona;CANALE=zona" con zone = autostrade | italia | regione (es. sicilia) | provincia (es. PA).
+    # Il bot deve essere membro del canale (/invite @anas-bot). Esempio: "C03EYL07SL9=autostrade".
+    channel_subscriptions: str = ""
 
     # Database: Cloudflare D1 (produzione) oppure file SQLite locale (prove sul PC)
     cf_account_id: str = ""
@@ -50,16 +59,17 @@ class Config:
     anas_user_agent: str = "WazeItaliaAnasBot"  # ci presentiamo per quello che siamo (ANAS_USER_AGENT per cambiarlo)
     anas_route: str = "auto"  # auto | direct | worker (vedi anas/relay.py)
     worker_url: str = ""      # di solito non serve: il Worker lo salva da solo nel database
-    # Il firewall di ANAS tollera circa 20 richieste per ora "scorrevole" (03/11/2026: 19 in 55 minuti dopo
-    # due ore di silenzio sono passate; la 21ª in 65 minuti è stata chiusa con un "connection reset"; le
-    # raffiche e i giri accodati senza pausa sono stati bloccati prima). Il giro è lungo (circa un'ora) e
-    # "respira": una richiesta ogni 4-5 minuti, qualunque sia (pagina, ricerca, PDF), cioè 13-15 all'ora,
-    # e al primo blocco (o a due connessioni chiuse di fila) si ferma per un'ora.
+    # Il firewall di ANAS tollera circa 14-20 richieste per ora "scorrevole" (03/11/2026: 19 in 55 minuti dopo
+    # due ore di silenzio sono passate; le raffiche e i giri accodati senza pausa sono stati bloccati prima).
+    # Il giro è lungo (circa un'ora) e "respira": una richiesta ogni 4-5 minuti, qualunque sia (pagina,
+    # ricerca, PDF), cioè 13-15 all'ora, e alla pagina di blocco del firewall si ferma per un'ora.
+    # (I "connection reset" visti il 03-04/11 non erano il firewall: era la connessione tenuta aperta tra
+    # una richiesta e l'altra, chiusa dalla rete di GitHub dopo 4 minuti; vedi anas/client.py.)
     request_delay_seconds: float = 240.0  # pausa tra due richieste ad ANAS (~13 richieste all'ora)
-    # Soglia reale osservata a regime (04/11/2026, giri uno dietro l'altro): blocco alla 14ª richiesta
-    # nell'ora scorrevole. Ieri 19 in 55 minuti erano passate solo dopo due ore di silenzio.
-    max_requests_per_hour: int = 12  # tetto per ora scorrevole, contato attraverso i giri (anas/budget.py)
-    browser_like: bool = False  # esperimento: scaricare anche CSS/script della pagina, come un browser (vedi listing.py)
+    # Soglia reale osservata a regime (04/11/2026, giri uno dietro l'altro): blocchi alla 14ª e alla 12ª
+    # richiesta nell'ora scorrevole. Ieri 19 in 55 minuti erano passate solo dopo due ore di silenzio.
+    # Un blocco costa un'ora di silenzio (12 richieste perse): meglio 2 richieste in meno che un blocco.
+    max_requests_per_hour: int = 10  # tetto per ora scorrevole, contato attraverso i giri (anas/budget.py)
     max_pdf_per_run: int = 3  # PDF scaricati al massimo per giro (gli altri slittano al giro dopo)
     block_pause_minutes: int = 60  # dopo una pagina di blocco del firewall: niente richieste per un'ora
     max_requests_per_cycle: int = 4  # canale a numeri (di riserva): PDF provati per giro, pochi per il firewall
@@ -119,6 +129,8 @@ class Config:
         c.slack_bot_token = _str("SLACK_BOT_TOKEN", "")
         c.channel_ids = _list("SLACK_CHANNEL_IDS")
         c.admin_channel_id = _str("ADMIN_CHANNEL_ID", "")
+        c.admin_slack_bot_token = _str("ADMIN_SLACK_BOT_TOKEN", "")
+        c.channel_subscriptions = os.environ.get("CHANNEL_SUBSCRIPTIONS", "").strip()
         c.cf_account_id = _str("CF_ACCOUNT_ID", "")
         c.cf_d1_database_id = _str("CF_D1_DATABASE_ID", "")
         c.cf_api_token = _str("CF_API_TOKEN", "")
@@ -132,7 +144,6 @@ class Config:
         c.request_delay_seconds = float(_str("REQUEST_DELAY_SECONDS", str(c.request_delay_seconds)))
         c.max_pdf_per_run = _int("MAX_PDF_PER_RUN", c.max_pdf_per_run)
         c.max_requests_per_hour = _int("MAX_REQUESTS_PER_HOUR", c.max_requests_per_hour)
-        c.browser_like = _bool("BROWSER_LIKE", c.browser_like)
         c.block_pause_minutes = _int("BLOCK_PAUSE_MINUTES", c.block_pause_minutes)
         c.max_requests_per_cycle = _int("MAX_REQUESTS_PER_CYCLE", c.max_requests_per_cycle)
         c.max_gap = _int("MAX_GAP", c.max_gap)
@@ -156,8 +167,6 @@ class Config:
         errors = []
         if not self.slack_bot_token.startswith("xoxb-"):
             errors.append("SLACK_BOT_TOKEN mancante o non valido (deve iniziare con xoxb-)")
-        if not self.channel_ids:
-            errors.append("SLACK_CHANNEL_IDS mancante (ID del canale, es. C0123ABCD)")
         if not self.uses_d1 and not self.local_db_path:
             errors.append("Database mancante: imposta CF_ACCOUNT_ID, CF_D1_DATABASE_ID e CF_API_TOKEN "
                           "(oppure LOCAL_DB_PATH per una prova sul PC)")

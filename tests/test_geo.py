@@ -26,3 +26,18 @@ def test_legacy_sud_sardegna():
 def test_find_regions():
     assert find_regions("Struttura Territoriale Piemonte e Valle d'Aosta") == ["piemonte", "valle-d-aosta"]
     assert find_regions("Abruzzo e Molise") == ["abruzzo", "molise"]
+
+
+def test_motorways_zone_matches_any_motorway_anywhere():
+    from anas_bot.anas.parser import CLOSURE, Ordinanza
+    from anas_bot.db import User
+    from anas_bot.geo import MOTORWAYS
+    from anas_bot.matching import matches
+    a19 = Ordinanza(ord_id=1, category=CLOSURE, roads=["A19"], regions=["sicilia"], provinces=["PA"])
+    ra6 = Ordinanza(ord_id=2, category=CLOSURE, roads=["RA6"], regions=["umbria"], provinces=["PG"])
+    ss16 = Ordinanza(ord_id=3, category=CLOSURE, roads=["SS16"], regions=["puglia"], provinces=["BA"])
+    u = User("U1", configured=True, regions=[MOTORWAYS, "puglia"])
+    assert matches(u, a19) and matches(u, ra6) and matches(u, ss16)
+    only_puglia = User("U2", configured=True, regions=["puglia"])
+    assert not matches(only_puglia, a19) and matches(only_puglia, ss16)
+    assert a19.motorway and ra6.motorway and not ss16.motorway

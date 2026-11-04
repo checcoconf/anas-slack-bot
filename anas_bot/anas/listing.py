@@ -194,6 +194,9 @@ class ListingClient:
             log.warning("robots.txt non raggiungibile (%s): per prudenza non interrogo ANAS in questo giro", exc)
             self.anas.robots = RobotsPolicy.disallow_all(ua)
             return self.anas.robots
+        if is_block_page(r.text):
+            self.anas.robots = RobotsPolicy.disallow_all(ua)
+            raise BlockedError(f"firewall ANAS: robots.txt bloccato (HTTP {r.status_code})")
         if r.status_code == 200:
             policy = RobotsPolicy.from_text(r.text, ua)
             vietati = [u for u in (PAGE_URL, SEARCH_URL) if not policy.allowed(u)]
@@ -218,48 +221,18 @@ class ListingClient:
         if not self.anas.robots.allowed(PAGE_URL):
             raise TransientError("robots.txt vieta /it/ordinanze-web: non interrogo il sito")
         r = self._get(PAGE_URL)
-        self._primed = True
         if r.headers.get("x-relay-colo"):
             log.info("Pagina Ordinanze Web letta dal ponte del Worker (ingresso %s, esecuzione %s)",
                      r.headers["x-relay-colo"], r.headers.get("cf-placement", "non indicata"))
-        if r.status_code >= 500:
+        if r.status_code != 200:
             log.warning("Pagina Ordinanze Web: HTTP %s: %s", r.status_code, describe_error_page(r.text))
-            if is_block_page(r.text):
-                raise BlockedError("firewall ANAS: pagina Ordinanze Web bloccata")
+        if is_block_page(r.text):
+            raise BlockedError(f"firewall ANAS: pagina Ordinanze Web bloccata (HTTP {r.status_code})")
         if r.status_code != 200:
             raise TransientError(f"pagina Ordinanze Web: HTTP {r.status_code}")
+        self._primed = True  # solo a pagina letta davvero: altrimenti la ricerca la riapre (cookie di sessione)
         self.last_page_html = r.text
-        if self.browser_like:
-            self._fetch_page_assets(r.text)
         return r.text
-
-    # Esperimento (BROWSER_LIKE=true): dopo la pagina, scaricare anche i suoi CSS e script, come fa un
-    # browser, per misurare se il firewall tratta meglio chi "carica la pagina intera". Ogni risorsa è
-    # una richiesta in più (conta nel budget orario): si tiene acceso un giorno e si confrontano i blocchi.
-    browser_like = False
-    browser_like_max_assets = 6
-    _ASSET_RE = re.compile(r"""<(?:link[^>]+rel=["']stylesheet["'][^>]+href|script[^>]+src)=["']([^"']+)["']""", re.I)
-
-    def _fetch_page_assets(self, page_html: str) -> None:
-        urls = []
-        for u in self._ASSET_RE.findall(page_html):
-            if u.startswith("//"):
-                u = "https:" + u
-            elif u.startswith("/"):
-                u = SITE + u
-            if u.startswith(SITE) and u not in urls:
-                urls.append(u)
-        headers = {"Accept": "text/css,*/*;q=0.1", "Referer": PAGE_URL, "Sec-Fetch-Dest": "style",
-                   "Sec-Fetch-Mode": "no-cors", "Sec-Fetch-Site": "same-origin"}
-        for u in urls[: self.browser_like_max_assets]:
-            if u.endswith(".js") or ".js?" in u:
-                headers = {**headers, "Accept": "*/*", "Sec-Fetch-Dest": "script"}
-            try:
-                self.anas._throttle()
-                self.session.get(u, headers=headers, timeout=self.anas.timeout)
-            except Exception as exc:  # noqa: BLE001 - è un esperimento: una risorsa che non arriva non ferma il giro
-                log.info("Risorsa della pagina non scaricata (%s): %s", u, exc)
-        log.info("Esperimento BROWSER_LIKE: scaricate %d risorse della pagina", min(len(urls), self.browser_like_max_assets))
 
     def structures(self, day: date | None = None) -> list[Structure]:
         """Le strutture territoriali: dal menu della pagina se c'è, altrimenti scoperte interrogando la ricerca."""
@@ -310,10 +283,10 @@ class ListingClient:
                 r = self.session.post(SEARCH_URL, data=data, headers=headers, timeout=self.anas.timeout)
             except Exception as exc:  # noqa: BLE001 - rete: riprovare al prossimo giro
                 raise TransientError(f"elenco: {exc}") from exc
-            if r.status_code >= 500 and is_block_page(r.text):
-                # quarantena del firewall: riprovare la allungherebbe soltanto
+            if is_block_page(r.text):
+                # quarantena del firewall, con qualunque codice HTTP: riprovare la allungherebbe soltanto
                 log.warning("Elenco %s pagina %s: %s", code, page, describe_error_page(r.text, 200))
-                raise BlockedError(f"firewall ANAS: ricerca {code} bloccata")
+                raise BlockedError(f"firewall ANAS: ricerca {code} bloccata (HTTP {r.status_code})")
             if r.status_code < 500 or attempt == 2:
                 break
             # il sito a volte risponde 500: riapro la pagina (cookie nuovi) e riprovo una volta

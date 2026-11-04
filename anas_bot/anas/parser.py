@@ -244,6 +244,11 @@ class Ordinanza:
     def to_dict(self) -> dict:
         return asdict(self)
 
+    @property
+    def motorway(self) -> bool:
+        """Riguarda un'autostrada o un raccordo autostradale (codici A2, A19, RA6...)."""
+        return any(r.startswith("A") or r.startswith("RA") for r in self.roads)
+
     def is_expired(self, today: date) -> bool:
         if not self.end_date or self.open_ended:
             return False

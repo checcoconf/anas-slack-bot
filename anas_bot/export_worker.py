@@ -15,7 +15,7 @@ import sys
 from pathlib import Path
 
 from . import __version__, views
-from .geo import PROVINCES, REGIONS
+from .geo import MOTORWAYS, MOTORWAYS_LABEL, PROVINCES, REGIONS
 
 COMMAND = "/anas"
 OUT = Path(__file__).resolve().parents[1] / "worker" / "src" / "generated.js"
@@ -40,7 +40,7 @@ def build() -> dict:
         },
         "welcome": views.welcome_message(),
         "modal": views.preferences_modal(None),
-        "regions": REGIONS,
+        "regions": {MOTORWAYS: MOTORWAYS_LABEL, **REGIONS},
         "provinces": {p.code: {"name": p.name, "region": p.region} for p in PROVINCES},
     }
 

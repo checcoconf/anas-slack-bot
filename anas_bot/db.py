@@ -20,6 +20,7 @@ transazioni via API REST.
 from __future__ import annotations
 
 import json
+from datetime import date
 import logging
 import sqlite3
 import threading
@@ -281,6 +282,15 @@ class Database:
         rows = self.b.query(f"SELECT data FROM ordinanze WHERE ord_id IN ({marks}) ORDER BY ord_id", tuple(ord_ids))
         return [ordinanza_from_json(r["data"]) for r in rows]
 
+    def in_force_ordinanze(self, today: date) -> list[Ordinanza]:
+        """Ordinanze utili ancora in vigore (per il riepilogo a chi si iscrive): già valutate (1) o già in
+        vigore all'installazione (3); la scadenza si filtra in SQL per non caricare tutto l'archivio."""
+        rows = self.b.query(
+            "SELECT data FROM ordinanze WHERE notify_state IN (1, 3) AND category IN (?,?,?) "
+            "AND (json_extract(data, '$.end_date') IS NULL OR json_extract(data, '$.end_date') = '' "
+            "OR json_extract(data, '$.end_date') >= ?)", (*RELEVANT, today.isoformat()))
+        return [o for o in (ordinanza_from_json(r["data"]) for r in rows) if not o.is_expired(today)]
+
     def pending_ordinanze(self) -> list[Ordinanza]:
         rows = self.b.query("SELECT data FROM ordinanze WHERE notify_state=0 ORDER BY ord_id")
         return [ordinanza_from_json(r["data"]) for r in rows]
@@ -331,6 +341,16 @@ class Database:
                               (u, ord_id, now)) for u in user_ids]
         stmts.append(("UPDATE ordinanze SET notify_state=? WHERE ord_id=?", (2 if skip else 1, ord_id)))
         self.b.batch(stmts)
+
+    def delivered_ids(self, user_id: str) -> set[int]:
+        """Ordinanze già messe in coda (in qualunque stato) per un utente o canale."""
+        return {int(r["ord_id"]) for r in self.b.query("SELECT ord_id FROM deliveries WHERE user_id=?", (user_id,))}
+
+    def record_deliveries(self, user_id: str, ord_ids: list[int], status: str) -> None:
+        """Segna consegne fatte fuori dalla coda (riepilogo): così non si ripetono."""
+        now = time.time()
+        self.b.batch([("INSERT OR IGNORE INTO deliveries(user_id, ord_id, status, attempts, created_at, sent_at) "
+                       "VALUES(?,?,?,1,?,?)", (user_id, o, status, now, now)) for o in ord_ids])
 
     def pending_deliveries(self) -> dict[str, list[int]]:
         out: dict[str, list[int]] = {}

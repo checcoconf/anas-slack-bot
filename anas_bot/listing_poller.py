@@ -313,10 +313,10 @@ class ListingPoller:
                     streak += 1
                     failed.append(st.code)
                     log.warning("Elenco: struttura %s saltata in questo giro: %s", st.code, exc)
-                    if streak >= 2:
-                        # due di fila: è il firewall che chiude le connessioni (visto il 03/11/2026 alla 21ª
-                        # richiesta dell'ora), non un guasto di rete: stessa pausa di un blocco
-                        raise BlockedError(f"il sito chiude le connessioni ({', '.join(failed)}): {exc}") from exc
+                    if streak >= 3:
+                        # tre di fila: il sito (o la rete) non risponde: inutile continuare, riprova all'ora dopo.
+                        # Non è un blocco del firewall (quello manda la sua pagina): niente pausa di un'ora.
+                        raise TransientError(f"il sito non risponde ({', '.join(failed)}): {exc}") from exc
                     continue
                 done += 0 if st.national else 1
                 streak = 0

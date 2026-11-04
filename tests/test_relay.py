@@ -55,6 +55,33 @@ def _anas():
     return AnasClient("https://www.stradeanas.it/x?ord_id={id}", "test", 0)
 
 
+def test_relay_never_resends_a_request_that_already_left():
+    """Una richiesta interrotta (connessione chiusa, timeout in lettura) non si rimanda da sola: sarebbe
+    una richiesta in più ad ANAS, senza pausa e fuori budget. Si riprova solo se il TCP non si apre."""
+    from anas_bot.anas.relay import use_relay
+    anas = _anas()
+    use_relay(anas, "https://bot.example.workers.dev", "k")
+    for adapter in (anas.session.get_adapter(URL), anas.session.get_adapter("https://altro.example/")):
+        assert adapter.max_retries.read == 0 and adapter.max_retries.connect == 1
+
+
+def test_pdf_block_page_is_recognized_whatever_the_status(monkeypatch):
+    from anas_bot.anas.client import BlockedError
+    anas = _anas()
+    for status in (403, 503):
+        def get(url, timeout=None, allow_redirects=True, _s=status):
+            r = requests.Response()
+            r.status_code, r.url = _s, url
+            r._content = b"<html><h1>Web Page Blocked!</h1><p>Attack ID 20000046</p></html>"
+            return r
+        monkeypatch.setattr(anas.session, "get", get)
+        try:
+            anas.fetch_pdf(1)
+        except BlockedError:
+            continue
+        raise AssertionError(f"HTTP {status} con la pagina di blocco non riconosciuto come blocco")
+
+
 def test_auto_switches_to_worker_when_direct_is_blocked_and_remembers_it():
     db = Database.local(":memory:")
     db.set("worker_url", "https://bot.example.workers.dev")

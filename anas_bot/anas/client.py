@@ -53,6 +53,12 @@ class BlockedError(TransientError):
     """Il firewall di ANAS ci ha messo in quarantena: niente altre richieste per un po'."""
 
 
+# Ritentativi automatici di urllib3, per tutti i collegamenti ad ANAS (diretti o dal ponte del Worker):
+# solo se la connessione non si apre (TCP). Mai rimandare una richiesta già partita (connessione chiusa,
+# timeout in lettura): per il firewall sarebbe una richiesta in più, fatta senza pausa e fuori budget.
+RETRY_POLICY = Retry(total=1, connect=1, read=0, status=0, backoff_factor=2, allowed_methods=frozenset({"GET"}))
+
+
 class AnasClient:
     def __init__(self, url_template: str, user_agent: str, delay_seconds: float = 2.0,
                  timeout: tuple[float, float] = (10, 60)) -> None:
@@ -75,13 +81,13 @@ class AnasClient:
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             "Accept-Language": "it-IT,it;q=0.8,en-US;q=0.5,en;q=0.3",
             "Accept-Encoding": "gzip, deflate",  # niente "br": richiederebbe il pacchetto brotli
+            # Una connessione nuova per ogni richiesta: tra una richiesta e l'altra passano 4-5 minuti e la
+            # rete di GitHub (Azure) chiude in silenzio le connessioni inattive da 4 minuti; riusarle dava
+            # "connection reset" che sembravano blocchi del firewall (04/11/2026).
+            "Connection": "close",
         })
-        # Solo errori di connessione (TCP non aperto): mai riprovare una connessione chiusa dal server
-        # ("connection reset"), che per il firewall di ANAS è un "no" e riprovare lo allunga.
-        retry = Retry(total=1, connect=1, read=0, status=0, backoff_factor=2,
-                      allowed_methods=frozenset({"GET"}))
-        self.session.mount("https://", HTTPAdapter(max_retries=retry))
-        self.session.mount("http://", HTTPAdapter(max_retries=retry))
+        self.session.mount("https://", HTTPAdapter(max_retries=RETRY_POLICY))
+        self.session.mount("http://", HTTPAdapter(max_retries=RETRY_POLICY))
 
     def url_for(self, ord_id: int) -> str:
         return self.url_template.format(id=ord_id)
@@ -110,20 +116,21 @@ class AnasClient:
         except requests.RequestException as exc:
             raise TransientError(f"rete: {exc}") from exc
 
+        body = r.content
+        if body[:5] == b"%PDF-":
+            return body
+        # La pagina di blocco del firewall può arrivare con qualunque codice (403, 503...): si riconosce dal testo
+        if is_block_page(r.text):
+            raise BlockedError(f"firewall ANAS: PDF {ord_id} bloccato (HTTP {r.status_code})")
         if r.status_code in (429, 503):
             retry_after = r.headers.get("Retry-After", "")
             raise TransientError(f"HTTP {r.status_code}, Retry-After={retry_after or '?'}")
         if r.status_code >= 500:
-            if is_block_page(r.text):
-                raise BlockedError(f"firewall ANAS: PDF {ord_id} bloccato (HTTP {r.status_code})")
             raise TransientError(f"HTTP {r.status_code}")
         if r.status_code in (401, 403):
             raise TransientError(f"HTTP {r.status_code}: accesso negato (blocco anti-bot?)")
         if r.status_code == 404:
             return None
-        body = r.content
-        if body[:5] == b"%PDF-":
-            return body
         # Il sito a volte risponde 200 con una pagina HTML quando l'id non esiste.
         log.debug("ord_id=%s: risposta non PDF (%s, %d byte)", ord_id,
                   r.headers.get("Content-Type"), len(body))

@@ -83,7 +83,8 @@ export function describeKinds(u) {
 export function savedMessage(u) {
   return {
     text: "✅ Preferenze salvate.",
-    blocks: [{ type: "section", text: { type: "mrkdwn", text: `✅ *Preferenze salvate!*\n\n${describeZones(u)}\n🔔 ${describeKinds(u)}` } }],
+    blocks: [{ type: "section", text: { type: "mrkdwn", text: `✅ *Preferenze salvate!*\n\n${describeZones(u)}\n🔔 ${describeKinds(u)}` } },
+      { type: "context", elements: [{ type: "mrkdwn", text: "📋 Entro un'ora ti mando il riepilogo delle ordinanze già in vigore nelle tue zone; poi solo le novità." }] }],
   };
 }
 

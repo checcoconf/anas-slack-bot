@@ -10,7 +10,9 @@ from anas_bot.notifier import Notifier
 from anas_bot.poller import Poller
 from anas_bot.membership import Membership
 from tests import samples as s
-from tests.fakes import FakeSlack, FakeSource
+from slack_sdk.errors import SlackApiError
+
+from tests.fakes import FakeSlack, FakeSource, _resp
 
 TODAY = date(2026, 11, 1)
 
@@ -69,6 +71,28 @@ def test_transient_error_does_not_advance(db, cfg):
     src.fail_from = None
     Poller(db, src, cfg).run_cycle()
     assert db.cursor() == 101
+
+
+def test_slack_outage_defers_deliveries_without_crashing(db, cfg):
+    """Slack non raggiungibile (errore di rete, non errore API): niente eccezione, i messaggi restano in coda
+    e partono al tentativo dopo; e non si insiste con gli altri utenti nello stesso giro."""
+    _subscribe(db, "U_A", all_italy=True)
+    _subscribe(db, "U_B", all_italy=True)
+    src = FakeSource({100: s.CLOSURE_SS614})
+    Poller(db, src, cfg).run_cycle()
+    slack = FakeSlack()
+    calls = []
+
+    def down(users, **_):
+        calls.append(users)
+        raise OSError("Slack non raggiungibile")
+    slack.conversations_open = down
+    res = Notifier(db, slack).run(TODAY)
+    assert res.errors == 1 and len(calls) == 1 and slack.posts == []
+    assert sum(len(v) for v in db.pending_deliveries().values()) == 2   # entrambi ancora in coda
+    slack = FakeSlack()
+    Notifier(db, slack).deliver(TODAY)
+    assert len(slack.posts_to("U_A")) == 1 and len(slack.posts_to("U_B")) == 1
 
 
 def test_end_to_end_notifications(db, cfg):
@@ -171,3 +195,70 @@ def test_no_lookahead_while_ordinances_keep_coming(db, cfg):
     src = FakeSource({100: s.CLOSURE_SS614})
     Poller(db, src, cfg).run_cycle()                   # appena trovata una: niente assaggi
     assert max(src.requests) == 103
+
+
+# --- Canali iscritti e riepilogo per i nuovi iscritti ---------------------------------------
+
+def test_channel_subscription_receives_motorway_closures_only(db, cfg):
+    """CHANNEL_SUBSCRIPTIONS="C03EYL07SL9=autostrade": il canale riceve le chiusure su A*/RA*, non i limiti,
+    e il messaggio va dritto nel canale (niente conversazione privata)."""
+    from anas_bot.notifier import channel_subscribers
+    chans = channel_subscribers("C03EYL07SL9=autostrade; Cxx=marte ; =sicilia")
+    assert [c.user_id for c in chans] == ["C03EYL07SL9"]           # zona sconosciuta e canale vuoto ignorati
+    assert chans[0].regions == ["autostrade"] and not chans[0].want_speed and chans[0].receives
+    _subscribe(db, "U_ALL", all_italy=True)
+    src = FakeSource({100: s.CLOSURE_SS614, 101: s.RAMP_A2, 102: s.SPEED_PERMANENT})
+    Poller(db, src, cfg).run_cycle()
+    slack = FakeSlack()
+    Notifier(db, slack, channels=chans).run(TODAY)
+    to_chan = [p for p in slack.posts if p["channel"] == "C03EYL07SL9"]
+    assert len(to_chan) == 1 and "A2" in to_chan[0]["text"] and "SS614" not in to_chan[0]["text"]
+    assert len(slack.posts_to("U_ALL")) == 1                           # gli iscritti ricevono come prima
+
+
+def test_channel_errors_are_reported_once_for_the_admin(db, cfg):
+    from anas_bot.notifier import channel_subscribers
+    _subscribe(db, "U_X", provinces=["CS"])
+    Poller(db, FakeSource({101: s.RAMP_A2}), cfg).run_cycle()
+    slack = FakeSlack()
+    real = slack.chat_postMessage
+
+    def post(**kw):
+        if kw["channel"].startswith("C"):
+            raise SlackApiError("errore", _resp({"ok": False, "error": "not_in_channel"}))
+        return real(**kw)
+    slack.chat_postMessage = post
+    res = Notifier(db, slack, channels=channel_subscribers("C1=autostrade")).run(TODAY)
+    assert res.channel_errors == {"C1": "not_in_channel"} and len(slack.posts_to("U_X")) == 1
+
+
+def test_digest_of_in_force_ordinances_when_zones_are_chosen(db, cfg):
+    """Chi sceglie le zone riceve subito ciò che è già in vigore lì (e non lo riceve una seconda volta)."""
+    from anas_bot.digest import Digest
+    src = FakeSource({100: s.CLOSURE_SS614, 101: s.RAMP_A2, 102: s.SPEED_PERMANENT, 105: s.EXPIRED})
+    Poller(db, src, cfg).run_cycle()
+    Notifier(db, FakeSlack()).run(TODAY)                 # nessun iscritto: valutate, consegnate a nessuno
+    _subscribe(db, "U_NEW", regions=["abruzzo"])
+    slack = FakeSlack()
+    assert Digest(db, slack).run(TODAY) == 1
+    posts = slack.posts_to("U_NEW")
+    assert len(posts) == 1 and "1 ordinanza ANAS in vigore" in posts[0]["text"] and "SS614" in posts[0]["text"]
+    assert Digest(db, slack).run(TODAY) == 0             # stesse zone: niente doppioni
+    # cambia zone: riepilogo delle zone nuove, senza ripetere ciò che ha già avuto
+    db.save_preferences("U_NEW", all_italy=True, regions=[], provinces=[], want_closures=True, want_speed=True)
+    assert Digest(db, slack).run(TODAY) == 1
+    text = slack.posts_to("U_NEW")[-1]["text"]
+    assert "SS614" not in text and "A2" in text and "2 ordinanze" in text   # A2 e il limite; la scaduta no
+    # e le novità vere continuano ad arrivare dalla coda normale, una volta sola
+    Poller(db, FakeSource({106: s.MIXED_LANE_AND_CLOSURE}), cfg).run_cycle()
+    Notifier(db, slack).run(TODAY)
+    assert "SS16" in slack.posts_to("U_NEW")[-1]["text"] and len(slack.posts_to("U_NEW")) == 3
+
+
+def test_digest_with_nothing_in_force_says_so(db, cfg):
+    from anas_bot.digest import Digest
+    _subscribe(db, "U_Q", provinces=["AO"])
+    slack = FakeSlack()
+    assert Digest(db, slack).run(TODAY) == 1
+    assert "nessuna ordinanza" in slack.posts_to("U_Q")[0]["text"]
+    assert Digest(db, slack).run(TODAY) == 0

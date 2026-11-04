@@ -70,7 +70,12 @@ class Membership:
         return members
 
     def reconcile(self, first_run: bool = False) -> tuple[int, int]:
-        """Allinea il database ai membri reali dei canali. Restituisce (benvenuti, uscite)."""
+        """Allinea il database ai membri reali dei canali. Restituisce (benvenuti, uscite).
+
+        Senza canali configurati (modalità solo app) non c'è niente da allineare: gli utenti si iscrivono
+        dalla scheda Home e restano iscritti finché non mettono in pausa."""
+        if not self.cfg.channel_ids:
+            return 0, 0
         try:
             raw = self.channel_members()
         except SlackApiError as exc:

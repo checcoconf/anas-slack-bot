@@ -33,7 +33,11 @@ export async function setInChannel(db, userId, value) {
 }
 
 export async function markWelcomed(db, userId) {
-  await db.prepare("UPDATE users SET welcomed_at = ? WHERE user_id = ?").bind(now(), userId).run();
+  // anche per chi non è ancora in tabella (modalità solo app: il primo contatto è il benvenuto stesso)
+  await db.batch([
+    db.prepare(UPSERT).bind(userId, now()),
+    db.prepare("UPDATE users SET welcomed_at = ? WHERE user_id = ?").bind(now(), userId),
+  ]);
 }
 
 export async function setPaused(db, userId, value) {

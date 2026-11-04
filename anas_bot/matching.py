@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from .anas.parser import CLOSURE, REOPENING, SPEED, Ordinanza
 from .db import User
-from .geo import PROVINCE_BY_CODE
+from .geo import MOTORWAYS, PROVINCE_BY_CODE
 
 
 def wants_category(user: User, o: Ordinanza) -> bool:
@@ -19,6 +19,7 @@ def matches(user: User, o: Ordinanza, unknown_province_fallback: bool = True) ->
     """True se l'ordinanza ricade nelle zone scelte dall'utente.
 
     - "Tutta Italia" riceve tutto.
+    - "Autostrade (tutta Italia)" riceve ogni ordinanza su A* e RA*, in qualunque regione.
     - Una regione scelta copre tutte le sue province.
     - Una provincia scelta riceve le ordinanze che citano quella provincia.
     - Se dall'ordinanza non si ricava la provincia (solo la regione), chi ha
@@ -28,6 +29,8 @@ def matches(user: User, o: Ordinanza, unknown_province_fallback: bool = True) ->
     if not user.receives or not wants_category(user, o):
         return False
     if user.all_italy:
+        return True
+    if MOTORWAYS in user.regions and o.motorway:
         return True
     if set(o.regions) & set(user.regions):
         return True

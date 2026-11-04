@@ -39,6 +39,13 @@ export async function onMemberJoined(env, userId, channel) {
   }
 }
 
+async function welcomeIfNew(env, userId) {
+  const user = await getUser(env.DB, userId);
+  if (user?.welcomedAt || user?.configured) return;
+  if (!(await isHuman(env, userId))) return;
+  if (await sendDm(env, userId, welcomeMessage())) await markWelcomed(env.DB, userId);
+}
+
 async function handleEvent(env, event) {
   switch (event.type) {
     case "member_joined_channel":
@@ -49,6 +56,9 @@ async function handleEvent(env, event) {
       return;
     case "app_home_opened":
       if (event.tab === "home") await publishHome(env, event.user);
+      // Slack apre l'app sulla scheda Messaggi (vuota) per chi non ha mai ricevuto niente: il benvenuto
+      // con il pulsante "Scegli le zone" arriva lì, una volta sola, senza bisogno di un canale
+      else if (event.tab === "messages") await welcomeIfNew(env, event.user);
       return;
   }
 }
@@ -112,20 +122,34 @@ async function handleCommand(env, ctx, form) {
 
 // --- Orologio: avvia GitHub Actions ------------------------------------------
 
-export async function dispatchWorkflow(env) {
+// Un avvio mancato è un'ora senza letture: se GitHub non risponde (rete o 5xx) si riprova una volta
+// dopo una breve attesa. Gli errori 4xx (token, repo, ref sbagliati) non si riprovano: non cambiano da soli.
+export async function dispatchWorkflow(env, sleep = (ms) => new Promise((r) => setTimeout(r, ms))) {
   const url = `https://api.github.com/repos/${env.GITHUB_REPO}/actions/workflows/${env.GITHUB_WORKFLOW}/dispatches`;
-  const res = await fetch(url, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${env.GITHUB_TOKEN}`,
-      Accept: "application/vnd.github+json",
-      "X-GitHub-Api-Version": "2022-11-28",
-      "User-Agent": "anas-slack-bot-worker",
-    },
-    body: JSON.stringify({ ref: env.GITHUB_REF || "main" }),
-  });
-  if (res.status !== 204) console.error(`Avvio workflow non riuscito: HTTP ${res.status} ${await res.text()}`);
-  return res.status;
+  let status = 0;
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${env.GITHUB_TOKEN}`,
+          Accept: "application/vnd.github+json",
+          "X-GitHub-Api-Version": "2022-11-28",
+          "User-Agent": "anas-slack-bot-worker",
+        },
+        body: JSON.stringify({ ref: env.GITHUB_REF || "main" }),
+      });
+      status = res.status;
+      if (status === 204) return status;
+      console.error(`Avvio workflow non riuscito (tentativo ${attempt}): HTTP ${status} ${await res.text()}`);
+      if (status < 500) return status;
+    } catch (err) {
+      status = 0;
+      console.error(`Avvio workflow non riuscito (tentativo ${attempt}): ${err}`);
+    }
+    if (attempt === 1) await sleep(30_000);
+  }
+  return status;
 }
 
 // --- Ingresso ---------------------------------------------------------------

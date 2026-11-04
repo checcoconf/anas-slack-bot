@@ -16,6 +16,11 @@ import re
 import unicodedata
 from dataclasses import dataclass
 
+# Zona speciale scelta come una regione: tutte le autostrade e i raccordi autostradali (A*, RA*) d'Italia,
+# qualunque sia la regione. Non è una regione geografica: nessuna provincia le appartiene.
+MOTORWAYS = "autostrade"
+MOTORWAYS_LABEL = "🛣️ Autostrade (tutta Italia)"
+
 REGIONS: dict[str, str] = {
     # codice interno -> nome mostrato
     "abruzzo": "Abruzzo",
