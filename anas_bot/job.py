@@ -248,8 +248,7 @@ def main() -> int:
     if cfg.anas_bot_key:
         anas.session.headers["X-Waze-Bot-Key"] = cfg.anas_bot_key  # se ANAS ci riconosce da questo codice
     listing = ListingClient(anas)
-    blocked_until = float(db.get(BLOCKED_UNTIL, "0") or 0)
-    if blocked_until > time.time():
+    if not wait_for_pause(db, cfg):
         log.warning("In pausa dopo un blocco del firewall ANAS: nessuna richiesta in questo giro")
     else:
         try:
@@ -266,6 +265,22 @@ def main() -> int:
             log.warning("ANAS non raggiungibile né direttamente né dal ponte del Worker: %s", exc)
     source = PdfSource(anas, pdf_to_text)
     return run(cfg, db, client, source, listing)
+
+
+def wait_for_pause(db: Database, cfg: Config, now=time.time, sleep=time.sleep) -> bool:
+    """Pausa dopo un blocco del firewall: se finisce entro il giro, aspetta e poi si lavora (con meno tempo).
+    Restituisce False solo se la pausa copre tutto il giro. (04/11/2026: un giro partito un minuto prima
+    della fine della pausa aveva rinunciato a un'ora intera.)"""
+    remaining = float(db.get(BLOCKED_UNTIL, "0") or 0) - now()
+    if remaining <= 0:
+        return True
+    usable = cfg.job_time_budget_minutes * 60 - remaining
+    if usable < 10 * 60:  # con meno di 10 minuti di giro non vale la pena: si riprova all'ora dopo
+        return False
+    log.warning("In pausa dopo un blocco del firewall ANAS: aspetto %d minuti, poi lavoro per i %d che restano",
+                int(remaining / 60) + 1, int(usable / 60))
+    sleep(remaining + 1)
+    return True
 
 
 def load_robots_cached(db: Database, listing: ListingClient) -> None:

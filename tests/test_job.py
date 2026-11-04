@@ -192,6 +192,20 @@ def test_block_at_the_first_page_pauses_the_bot_and_alerts(cfg, monkeypatch):
     assert any("🧱" in p["text"] for p in slack.posts)
 
 
+def test_pause_ending_during_the_run_is_waited_out(cfg):
+    from anas_bot.listing_poller import BLOCKED_UNTIL
+    db = Database.local(":memory:")
+    slept = []
+    clock = {"t": 1000.0}
+    sleep = lambda s: slept.append(s) or clock.__setitem__("t", clock["t"] + s)  # noqa: E731
+    now = lambda: clock["t"]  # noqa: E731
+    assert job.wait_for_pause(db, cfg, now, sleep) and slept == []            # nessuna pausa
+    db.set(BLOCKED_UNTIL, str(1000.0 + 5 * 60))                               # finisce tra 5 minuti
+    assert job.wait_for_pause(db, cfg, now, sleep) and slept == [301.0]       # aspetta, poi lavora
+    db.set(BLOCKED_UNTIL, str(clock["t"] + 45 * 60))                          # ne resterebbero 5: rinuncia
+    assert not job.wait_for_pause(db, cfg, now, sleep) and len(slept) == 1
+
+
 def test_admin_alerts_can_use_a_second_workspace_token(cfg, monkeypatch):
     from anas_bot import job as J
     built = []

@@ -233,7 +233,8 @@ class ListingPoller:
         now: time.time() (sostituibile nei test) per la pausa dopo un blocco del firewall.
         hour: ora locale (0-23) per decidere se è il momento della lettura profonda; None = mai."""
         res = ListingResult()
-        now = time.time() if now is None else now
+        clock = time.time if now is None else (lambda: now)  # nei test l'orologio è fermo
+        now = clock()
         self.deep = hour is not None and self.cfg.is_deep_hour(hour)
         if self.deep:
             log.info("Elenco: lettura profonda notturna, %d pagine per struttura", self.cfg.listing_deep_pages)
@@ -258,7 +259,7 @@ class ListingPoller:
             log.info("Elenco: %s", exc)  # non è un errore: il tetto orario ha fatto il suo lavoro
         except BlockedError as exc:
             pause = self.cfg.block_pause_minutes * 60
-            self.db.set(BLOCKED_UNTIL, str(now + pause))
+            self.db.set(BLOCKED_UNTIL, str(clock() + pause))  # da adesso, non dall'inizio del giro
             res.error, res.blocked, res.block_started = str(exc), True, True
             log.warning("Elenco: %s. Nessuna richiesta ad ANAS per %d minuti", exc, self.cfg.block_pause_minutes)
         except TransientError as exc:
