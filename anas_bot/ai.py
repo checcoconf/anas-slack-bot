@@ -14,12 +14,19 @@ llama.cpp sul runner di GitHub (4 CPU, 16 GB), 40-60 secondi per parere, usando 
 lo scarica una volta e lo tiene nella cache di Actions. Se manca il modello, la libreria o qualunque cosa
 va storta, ogni funzione risponde None e il bot lavora come se il modello non esistesse.
 
+Ogni parere gira in un processo figlio (anas_bot/ai_worker.py): llama.cpp è codice nativo e, se crolla
+(è successo il 05/11/2026: ruota compilata per una CPU e riusata dalla cache su un runner con CPU diversa,
+"illegal instruction", job morto a metà giro), muore solo il figlio e il giro continua con le sole regole.
+Il workflow la compila senza ottimizzazioni per la CPU del momento (GGML_NATIVE=OFF), così la cache pip
+vale per tutti i runner.
+
 AI_MODE: flag (default: i pareri segnano "da verificare" e ampliano il vocabolario), log (solo nel log),
 off (non si carica nemmeno il modello).
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
@@ -30,6 +37,11 @@ log = logging.getLogger(__name__)
 MAX_TEXT = 3000  # caratteri di riepilogo + PDF passati al modello (il contesto è 4k token)
 MAX_CALLS_PER_RUN = 15  # oltre, il giro va avanti con le sole regole: il modello non deve rallentare la lettura
 MAX_SECONDS_PER_RUN = 600  # idem se i pareri hanno già preso 10 minuti del giro
+SUBPROCESS_TIMEOUT = 180  # secondi per un parere (caricamento del modello compreso): oltre, il figlio viene ucciso
+
+
+class ModelCrashed(Exception):
+    """Il processo del modello è uscito male (crollo del codice nativo, libreria mancante...)."""
 
 SYSTEM = (
     "Sei un assistente che legge ordinanze stradali di ANAS per gli editor della mappa Waze. "
@@ -82,10 +94,10 @@ class LocalModel:
     def __init__(self, model_path: str, generate=None, n_threads: int | None = None) -> None:
         self.model_path = model_path
         self._generate = generate
-        self._llm = None
         self.n_threads = n_threads or max(1, os.cpu_count() or 2)  # tutte le CPU del runner
         self.calls = 0
         self.seconds = 0.0
+        self.disabled = False  # True dopo un crollo del processo del modello: da lì solo regole, per tutto il giro
 
     @classmethod
     def from_env(cls, mode: str, model_path: str) -> "LocalModel | None":
@@ -104,16 +116,23 @@ class LocalModel:
             return None
         return cls(model_path)
 
-    def _llama(self):
-        if self._llm is None:
-            from llama_cpp import Llama
-            t0 = time.monotonic()
-            self._llm = Llama(model_path=self.model_path, n_ctx=4096, n_threads=self.n_threads, verbose=False)
-            log.info("Modello locale caricato in %.1f s (%s)", time.monotonic() - t0, os.path.basename(self.model_path))
-        return self._llm
+    def _in_subprocess(self, prompt: str) -> str:
+        """Carica il modello e risponde in un processo figlio (anas_bot/ai_worker.py): se il codice nativo
+        crolla (SIGILL su una CPU diversa, memoria finita) o si impianta, muore o viene fermato solo il figlio."""
+        import subprocess
+        import sys
+        req = json.dumps({"model_path": self.model_path, "system": SYSTEM, "prompt": prompt, "n_threads": self.n_threads})
+        p = subprocess.run([sys.executable, "-m", "anas_bot.ai_worker"], input=req, capture_output=True, text=True,
+                           timeout=SUBPROCESS_TIMEOUT)
+        if p.returncode != 0:
+            tail = (p.stderr or "").strip().splitlines()[-1:] or ["nessun dettaglio"]
+            raise ModelCrashed(f"uscita {p.returncode}: {tail[0][:200]}")
+        return p.stdout
 
     def ask(self, prompt: str) -> str | None:
         """Risposta del modello, None se qualcosa va storto (mai un'eccezione verso il chiamante)."""
+        if self.disabled:
+            return None
         if self.calls >= MAX_CALLS_PER_RUN or self.seconds >= MAX_SECONDS_PER_RUN:
             if self.calls == MAX_CALLS_PER_RUN or self.seconds >= MAX_SECONDS_PER_RUN:
                 log.info("Modello locale: tetto del giro raggiunto (%d pareri, %.0f s): da qui solo regole", self.calls, self.seconds)
@@ -124,12 +143,17 @@ class LocalModel:
             if self._generate is not None:
                 out = self._generate(prompt)
             else:
-                r = self._llama().create_chat_completion(
-                    messages=[{"role": "system", "content": SYSTEM}, {"role": "user", "content": prompt}],
-                    max_tokens=80, temperature=0.0)
-                out = r["choices"][0]["message"]["content"]
+                out = self._in_subprocess(prompt)
+        except ModelCrashed as exc:
+            self.disabled = True
+            log.warning("Modello locale: il processo del modello è crollato (%s): per questo giro solo regole", exc)
+            return None
         except Exception as exc:  # noqa: BLE001 - il modello è un aiuto, non un requisito
-            log.warning("Modello locale: errore (%s): parere saltato", exc)
+            if exc.__class__.__name__ == "TimeoutExpired":
+                self.disabled = True
+                log.warning("Modello locale: nessuna risposta entro %d s: per questo giro solo regole", SUBPROCESS_TIMEOUT)
+            else:
+                log.warning("Modello locale: errore (%s): parere saltato", exc)
             return None
         finally:
             self.calls += 1

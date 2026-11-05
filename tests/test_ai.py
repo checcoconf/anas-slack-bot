@@ -1,5 +1,6 @@
 """Secondo parere del modello locale: con un modello finto (prompt -> risposta), senza llama.cpp."""
 
+import json
 from datetime import date
 
 from anas_bot.ai import LocalModel
@@ -156,3 +157,53 @@ def test_model_calls_are_capped_per_run():
     slow = LocalModel("x.gguf", generate=lambda prompt: "VERDETTO: chiusura_totale\nMOTIVO: ok")
     slow.seconds = AI.MAX_SECONDS_PER_RUN
     assert slow.closure_verdict("testo") is None
+
+
+def test_model_crash_disables_it_for_the_run(monkeypatch):
+    """Il processo del modello crolla (es. istruzione illegale): parere None e da lì solo regole, mai un'eccezione."""
+    from anas_bot import ai as ai_mod
+    m = ai_mod.LocalModel("x.gguf")
+    calls = []
+
+    def crashed(prompt):
+        calls.append(prompt)
+        raise ai_mod.ModelCrashed("uscita -4: Illegal instruction")
+    monkeypatch.setattr(m, "_in_subprocess", crashed)
+    assert m.closure_verdict("testo") is None
+    assert m.disabled is True
+    assert m.closure_verdict("altro testo") is None
+    assert len(calls) == 1  # dopo il crollo non si riprova più nel giro
+
+
+def test_model_timeout_disables_it_for_the_run(monkeypatch):
+    import subprocess
+    from anas_bot import ai as ai_mod
+    m = ai_mod.LocalModel("x.gguf")
+
+    def hung(prompt):
+        raise subprocess.TimeoutExpired(cmd="x", timeout=1)
+    monkeypatch.setattr(m, "_in_subprocess", hung)
+    assert m.closure_verdict("testo") is None
+    assert m.disabled is True
+
+
+def test_model_subprocess_protocol(monkeypatch):
+    """Il figlio riceve il JSON e la risposta torna com'è; uscita diversa da 0 -> ModelCrashed."""
+    import subprocess
+    from anas_bot import ai as ai_mod
+    m = ai_mod.LocalModel("x.gguf", n_threads=2)
+    seen = {}
+
+    def fake_run(args, input, capture_output, text, timeout):
+        seen["req"] = json.loads(input)
+        seen["args"] = args
+        return subprocess.CompletedProcess(args, 0, stdout="VERDETTO: non_chiusura\nMOTIVO: solo bici", stderr="")
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    assert m.closure_verdict("testo") == ("non_chiusura", "solo bici")
+    assert seen["req"]["model_path"] == "x.gguf" and seen["req"]["n_threads"] == 2
+    assert seen["args"][-2:] == ["-m", "anas_bot.ai_worker"]
+
+    def fake_crash(args, input, capture_output, text, timeout):
+        return subprocess.CompletedProcess(args, -4, stdout="", stderr="Illegal instruction (core dumped)")
+    monkeypatch.setattr(subprocess, "run", fake_crash)
+    assert m.closure_verdict("testo") is None and m.disabled

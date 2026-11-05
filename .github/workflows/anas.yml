@@ -53,7 +53,12 @@ jobs:
       - name: Installa llama.cpp per Python
         if: vars.AI_MODE != 'off'
         continue-on-error: true
-        run: pip install -r requirements-ai.txt   # compilata la prima volta, poi presa dalla cache pip
+        # Compilata la prima volta, poi presa dalla cache pip. GGML_NATIVE=OFF: istruzioni comuni a tutti i runner
+        # (AVX2), non quelle della CPU del momento: una ruota "su misura" riusata su un runner diverso crolla
+        # con "illegal instruction" (successo il 05/11/2026).
+        env:
+          CMAKE_ARGS: "-DGGML_NATIVE=OFF -DGGML_AVX=ON -DGGML_AVX2=ON -DGGML_FMA=ON -DGGML_F16C=ON"
+        run: pip install -r requirements-ai.txt
 
       - name: Giro ANAS -> Slack
         run: python -m anas_bot.job
