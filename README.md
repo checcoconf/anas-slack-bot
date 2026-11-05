@@ -14,18 +14,18 @@ Ogni utente sceglie le zone da menu a tendina: 🇮🇹 tutta Italia, 🗺️ re
 ## Come è fatto
 
 ```
-          Slack  ◄─────────────────────────────────────────────────────┐
-            │ eventi, pulsanti, modulo             messaggi privati,    │
-            ▼                                     canale autostrade     │
- ┌─────────────────────────┐  ogni ora: giro        ┌──────────────────┴───────────────────┐
- │ Cloudflare Worker       │ ─────────────────────► │ GitHub Actions (Python)              │
- │ (sempre acceso, gratis) │  al salvataggio:       │ giro orario: elenco Ordinanze Web    │
- │ benvenuto, menu, Home   │  mini-job riepilogo    │ (10 richieste/ora), PDF di notte,    │
- │ ponte verso ANAS ◄──────┼────────────────────────┤ classificazione a regole + secondo   │
- │ (Milano)                │  richieste ad ANAS     │ parere del modello locale (Qwen 7B)  │
- └───────────┬─────────────┘                        └──────────────────┬───────────────────┘
-             │               Cloudflare D1 (SQLite)                    │
-             └────────► iscritti, ordinanze, coda, budget orario ◄──────┘
+          Slack  ◄──────────────────────────────────────────────────────────┐
+            │ eventi, pulsanti, modulo                   messaggi privati,  │
+            ▼                                            canale autostrade  │
+ ┌─────────────────────────┐   ogni ora: giro      ┌────────────────────────┴──────────┐
+ │ Cloudflare Worker       │ ────────────────────► │ GitHub Actions (Python)           │
+ │ (sempre acceso, gratis) │   al salvataggio:     │ giro orario: elenco Ordinanze Web │
+ │ benvenuto, menu, Home   │   mini-job riepilogo  │ (10 richieste/ora), PDF di notte  │
+ │ ponte verso ANAS        │ ◄──────────────────── │ regole di classificazione +       │
+ │ (gira vicino a Milano)  │   richieste ad ANAS   │ secondo parere del modello locale │
+ └───────────┬─────────────┘                       └─────────────────┬─────────────────┘
+             │               Cloudflare D1 (SQLite)                  │
+             └────────► iscritti, ordinanze, coda, budget orario ◄───┘
 ```
 
 - **Cloudflare Worker** (cartella `worker/`, JavaScript). È la parte sempre accesa: risponde a Slack entro i 3 secondi richiesti.
