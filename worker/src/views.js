@@ -35,6 +35,7 @@ export function preferencesModal(user) {
   const kinds = [];
   if (user.wantClosures) kinds.push(ids.kindClosures);
   if (user.wantSpeed) kinds.push(ids.kindSpeed);
+  if (user.wantAll) kinds.push(ids.kindAll);
   setInitial(element(modal, B_KINDS), kinds);
   return modal;
 }
@@ -58,6 +59,7 @@ export function parseModal(values) {
       provinces,
       wantClosures: kinds.includes(ids.kindClosures),
       wantSpeed: kinds.includes(ids.kindSpeed),
+      wantAll: kinds.includes(ids.kindAll),
     },
     errors,
   };
@@ -77,6 +79,7 @@ export function describeKinds(u) {
   const k = [];
   if (u.wantClosures) k.push("⛔ chiusure e ✅ aperture");
   if (u.wantSpeed) k.push("🚦 limiti di velocità permanenti");
+  if (u.wantAll) k.push("🚧 anche cantieri e restringimenti");
   return k.join(" · ") || "nessuno";
 }
 
@@ -113,7 +116,7 @@ export function homeView(u) {
     });
   }
   blocks.push({ type: "actions", elements: buttons });
-  blocks.push({ type: "context", elements: [{ type: "mrkdwn", text: "📄 Fonte: ordinanze pubblicate da ANAS S.p.A. Controlla sempre il PDF prima di modificare la mappa." }] });
+  blocks.push({ type: "context", elements: [{ type: "mrkdwn", text: `📄 Fonte: ordinanze pubblicate da ANAS S.p.A. Controlla sempre il PDF prima di modificare la mappa.\n${G.betaNotice}` }] });
   return { type: "home", blocks };
 }
 

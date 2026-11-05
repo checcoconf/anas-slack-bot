@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from datetime import date
 
-from .anas.parser import CLOSURE, REOPENING, SPEED, Ordinanza
+from .anas.parser import CLOSURE, OTHER, REOPENING, SPEED, Ordinanza
 from .db import User
 from .geo import MOTORWAYS, MOTORWAYS_LABEL, PROVINCE_BY_CODE, REGIONS, provinces_of_region
 
@@ -34,6 +34,7 @@ B_KINDS, A_KINDS = "kinds_block", "kinds"
 
 KIND_CLOSURES = "closures"
 KIND_SPEED = "speed"
+KIND_ALL = "all"  # anche cantieri e restringimenti: tutte le altre ordinanze
 
 
 
@@ -75,6 +76,8 @@ _KIND_OPTIONS = {
                     "description": _txt("Strade, rampe e svincoli chiusi o aperti, nuove strade")},
     KIND_SPEED: {"text": _txt("🚦 Limiti di velocità permanenti"), "value": KIND_SPEED,
                  "description": _txt("Nuovi limiti definitivi sulle strade ANAS")},
+    KIND_ALL: {"text": _txt("🚧 Anche cantieri e restringimenti"), "value": KIND_ALL,
+               "description": _txt("Tutte le altre ordinanze delle tue zone: corsie ridotte, sensi unici, limiti temporanei (tante!)")},
 }
 
 
@@ -96,7 +99,8 @@ def preferences_modal(user: User | None) -> dict:
     if u.all_italy:
         scope_el["initial_options"] = [_SCOPE_OPTION]
     kinds_initial = [o for k, o in _KIND_OPTIONS.items()
-                     if (k == KIND_CLOSURES and u.want_closures) or (k == KIND_SPEED and u.want_speed)]
+                     if (k == KIND_CLOSURES and u.want_closures) or (k == KIND_SPEED and u.want_speed)
+                     or (k == KIND_ALL and u.want_all)]
     kinds_el: dict = {"type": "checkboxes", "action_id": A_KINDS, "options": list(_KIND_OPTIONS.values())}
     if kinds_initial:
         kinds_el["initial_options"] = kinds_initial
@@ -117,9 +121,14 @@ def preferences_modal(user: User | None) -> dict:
              "element": regions_el},
             {"type": "input", "block_id": B_PROVINCES, "optional": True, "label": _txt("📍 Singole province"),
              "element": provinces_el, "hint": _txt("🔍 Scrivi nel menu per cercare, es. \"Cun\" per Cuneo")},
-            {"type": "input", "block_id": B_KINDS, "label": _txt("🔔 Cosa vuoi ricevere"), "element": kinds_el},
+            {"type": "input", "block_id": B_KINDS, "label": _txt("🔔 Cosa vuoi ricevere"), "element": kinds_el,
+             "hint": _txt(BETA_NOTICE)},
         ],
     }
+
+
+# Avviso mostrato nel modulo, nella scheda Home e nel benvenuto: la classificazione è automatica.
+BETA_NOTICE = ('🧪 Il filtro "utili per Waze" è in beta: legge il riepilogo di ANAS con regole, non è perfetto. Può perdere qualche ordinanza o mandarne qualcuna che non c\'entra. Se noti un errore, segnalalo.')
 
 
 def welcome_message() -> dict:
@@ -131,13 +140,13 @@ def welcome_message() -> dict:
                 "⛔ strade, carreggiate, rampe e svincoli *chiusi*\n"
                 "✅ le *riaperture* e 🆕 le *nuove strade* aperte al traffico\n"
                 "🚦 i *limiti di velocità permanenti*\n\n"
-                "🚫 Niente cantieri con corsie ridotte o sensi unici alternati.\n\n"
+                "🚧 Cantieri, corsie ridotte e sensi unici alternati solo se li chiedi.\n\n"
                 "👇 Per iniziare scegli le regioni o le province che ti interessano."}},
             {"type": "actions", "elements": [
                 {"type": "button", "style": "primary", "action_id": ACTION_OPEN_PREFS,
                  "text": _txt("🗺️ Scegli le zone")}]},
             {"type": "context", "elements": [{"type": "mrkdwn", "text":
-                "⚙️ Puoi cambiarle quando vuoi dalla scheda *Home* di questa app."}]},
+                "⚙️ Puoi cambiarle quando vuoi dalla scheda *Home* di questa app.\n" + BETA_NOTICE}]},
         ],
     }
 
@@ -174,7 +183,7 @@ def title_line(o: Ordinanza) -> str:
         if len(speeds) > 1:
             return f"🚦 *NUOVI LIMITI: {' / '.join(map(str, speeds))} km/h*"
         return f"🚦 *NUOVO LIMITE: {speeds[0]} km/h*" if speeds else "🚦 *NUOVO LIMITE DI VELOCITÀ*"
-    return f"ℹ️ *{o.category.upper()}*"
+    return "🚧 *LAVORI E LIMITAZIONI*"  # tutte le altre ordinanze, per chi ha scelto di riceverle
 
 
 def time_line(window: str) -> str:
@@ -232,7 +241,7 @@ def ordinanza_blocks(o: Ordinanza) -> list[dict]:
     ]
 
 
-_SHORT = {CLOSURE: "⛔ chiusura", REOPENING: "✅ apertura", SPEED: "🚦 limite"}
+_SHORT = {CLOSURE: "⛔ chiusura", REOPENING: "✅ apertura", SPEED: "🚦 limite", OTHER: "🚧 lavori"}
 
 
 ORDINANZE_WEB_URL = "https://www.stradeanas.it/it/ordinanze-web"

@@ -25,7 +25,8 @@ export default {
    "kinds"
   ],
   "kindClosures": "closures",
-  "kindSpeed": "speed"
+  "kindSpeed": "speed",
+  "kindAll": "all"
  },
  "welcome": {
   "text": "👋 Ciao! Scegli le zone per cui vuoi ricevere chiusure e limiti ANAS.",
@@ -34,7 +35,7 @@ export default {
     "type": "section",
     "text": {
      "type": "mrkdwn",
-     "text": "👋 *Benvenuto!* Ti scrivo qui quando ANAS pubblica un'ordinanza utile per la mappa:\n\n⛔ strade, carreggiate, rampe e svincoli *chiusi*\n✅ le *riaperture* e 🆕 le *nuove strade* aperte al traffico\n🚦 i *limiti di velocità permanenti*\n\n🚫 Niente cantieri con corsie ridotte o sensi unici alternati.\n\n👇 Per iniziare scegli le regioni o le province che ti interessano."
+     "text": "👋 *Benvenuto!* Ti scrivo qui quando ANAS pubblica un'ordinanza utile per la mappa:\n\n⛔ strade, carreggiate, rampe e svincoli *chiusi*\n✅ le *riaperture* e 🆕 le *nuove strade* aperte al traffico\n🚦 i *limiti di velocità permanenti*\n\n🚧 Cantieri, corsie ridotte e sensi unici alternati solo se li chiedi.\n\n👇 Per iniziare scegli le regioni o le province che ti interessano."
     }
    },
    {
@@ -57,12 +58,13 @@ export default {
     "elements": [
      {
       "type": "mrkdwn",
-      "text": "⚙️ Puoi cambiarle quando vuoi dalla scheda *Home* di questa app."
+      "text": "⚙️ Puoi cambiarle quando vuoi dalla scheda *Home* di questa app.\n🧪 Il filtro \"utili per Waze\" è in beta: legge il riepilogo di ANAS con regole, non è perfetto. Può perdere qualche ordinanza o mandarne qualcuna che non c'entra. Se noti un errore, segnalalo."
      }
     ]
    }
   ]
  },
+ "betaNotice": "🧪 Il filtro \"utili per Waze\" è in beta: legge il riepilogo di ANAS con regole, non è perfetto. Può perdere qualche ordinanza o mandarne qualcuna che non c'entra. Se noti un errore, segnalalo.",
  "modal": {
   "type": "modal",
   "callback_id": "prefs_modal",
@@ -1430,6 +1432,19 @@ export default {
         "text": "Nuovi limiti definitivi sulle strade ANAS",
         "emoji": true
        }
+      },
+      {
+       "text": {
+        "type": "plain_text",
+        "text": "🚧 Anche cantieri e restringimenti",
+        "emoji": true
+       },
+       "value": "all",
+       "description": {
+        "type": "plain_text",
+        "text": "Tutte le altre ordinanze delle tue zone: corsie ridotte, sensi unici, limit",
+        "emoji": true
+       }
       }
      ],
      "initial_options": [
@@ -1460,6 +1475,11 @@ export default {
        }
       }
      ]
+    },
+    "hint": {
+     "type": "plain_text",
+     "text": "🧪 Il filtro \"utili per Waze\" è in beta: legge il riepilogo di ANAS con rego",
+     "emoji": true
     }
    }
   ]

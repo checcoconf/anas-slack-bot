@@ -224,3 +224,109 @@ def test_admin_alerts_can_use_a_second_workspace_token(cfg, monkeypatch):
     main_client = FakeSlack(members={})
     J.admin(main_client, cfg, "ciao")
     assert built == ["xoxb-altro"] and not main_client.posts            # non passa dal token principale
+
+
+def test_end_to_end_day_and_night_with_every_kind_of_subscriber(tmp_path, cfg):
+    """Scenario completo su più giri: iscritti con zone e tipi diversi, canale autostrade, riepilogo iniziale,
+    giorno (solo prime pagine) e notte (PDF), colonna nuova aggiunta da sola. Nessun doppione, nessun crash."""
+    from tests.test_listing import FakeListing, _closure, _rec, _riep
+    from anas_bot.db import migrate
+
+    db = Database.local(str(tmp_path / "e2e.sqlite3"))
+    assert migrate(db.b) == [] and migrate(db.b) == []                # schema già completo: niente da fare
+    cfg.channel_ids, cfg.channel_subscriptions = [], "CAUTO=autostrade"
+    slack = FakeSlack(members={})
+    listing = FakeListing({"BA": [_closure(300, "20/10/2026")], "MI": [_closure(301, "20/10/2026", numero="5/2026/MI")]})
+    src = FakeSource({})
+    for _ in range(2):                                                  # installazione: tutto "visto", nessun messaggio
+        job.run(cfg, db, slack, src, listing, started=0.0)
+    assert [p["channel"] for p in slack.posts] == ["CADMIN"]            # solo "bot attivo": nessun iscritto avvisato
+    slack.posts.clear()
+
+    db.save_preferences("U_IT", all_italy=True, regions=[], provinces=[], want_closures=True, want_speed=True)
+    db.save_preferences("U_PUG", all_italy=False, regions=["puglia"], provinces=[], want_closures=True,
+                        want_speed=False, want_all=True)
+    db.save_preferences("U_LOM", all_italy=False, regions=["lombardia"], provinces=[], want_closures=True, want_speed=True)
+
+    # giorno: una chiusura in Puglia, un restringimento in Puglia, una chiusura di rampa sull'A2 (Lombardia finta), una proroga
+    listing.pages["BA"].insert(0, _closure(400, "05/11/2026"))
+    listing.pages["BA"].insert(0, _rec(401, _riep("SS 100", "su <strong>corsia di marcia</strong>,", ["restringimento carreggiata"],
+                                                  "a partire dal <strong>05/11/2026</strong> fino al <strong>20/11/2026</strong>")))
+    listing.pages["MI"].insert(0, _rec(402, _riep("A2 AUTOSTRADA DEL MEDITERRANEO", "sulla <strong>rampa di uscita</strong>,",
+                                                  ["chiusura al traffico"], "a partire dal <strong>05/11/2026</strong> fino al <strong>09/11/2026</strong>"),
+                                       numero="7/2026/MI"))
+    listing.pages["BA"].insert(0, _rec(403, "", tipo="Proroga", numero="8/2026/BA"))   # senza riepilogo: serve il PDF
+    import anas_bot.job as J
+    real_now = J.datetime
+
+    class Day(real_now):
+        @classmethod
+        def now(cls, tz=None):
+            return real_now(2026, 11, 5, 14, 0, tzinfo=tz)
+    J.datetime = Day
+    try:
+        job.run(cfg, db, slack, src, listing, started=0.0)
+    finally:
+        J.datetime = real_now
+    assert src.requests == []                                          # di giorno nessun PDF
+    by = lambda ch: [p["text"] for p in slack.posts if p["channel"] == ch]  # noqa: E731
+    it, pug, lom, auto = by("D-U_IT"), by("D-U_PUG"), by("D-U_LOM"), by("CAUTO")
+    # riepiloghi iniziali (zone appena scelte) prima delle novità
+    assert any("in vigore" in t for t in it) and any("in vigore" in t for t in pug) and any("in vigore" in t for t in lom)
+    news = [t for t in it if "in vigore" not in t]
+    assert any("SS16" in t for t in news) and any("A2" in t for t in news)      # tutta Italia: le due chiusure
+    assert any("SS100" in t for t in pug) and not any("SS100" in t for t in it)  # il restringimento solo a chi vuole tutto
+    lom_news = [t for t in lom if "in vigore" not in t]
+    assert any("A2" in t for t in lom_news) and not any("SS16" in t for t in lom_news)   # Lombardia: solo la sua
+    assert auto and all("A2" in t and "SS16" not in t for t in auto)            # canale: solo autostrade
+    assert not any("A2" in t for t in pug)                                       # ...e non a chi ha un'altra regione
+
+    # notte: la proroga si legge dal PDF; nessun doppione per nessuno
+    n_before = len(slack.posts)
+    src.docs[403] = s.EXTENSION_BARI
+    cfg.listing_deep_pages = 1
+
+    class Night(real_now):
+        @classmethod
+        def now(cls, tz=None):
+            return real_now(2026, 11, 6, 3, 0, tzinfo=tz)
+    J.datetime = Night
+    try:
+        job.run(cfg, db, slack, src, listing, started=0.0)
+        job.run(cfg, db, slack, src, listing, started=0.0)              # un altro giro: niente di nuovo
+    finally:
+        J.datetime = real_now
+    assert src.requests == [403]
+    new_posts = slack.posts[n_before:]
+    assert any(p["channel"] == "D-U_IT" and "SS172" in p["text"] for p in new_posts)   # la proroga, letta dal PDF
+    assert not any(p["channel"] in ("D-U_LOM", "CAUTO") for p in new_posts)            # non è della loro zona
+    texts = [(p["channel"], p["text"]) for p in slack.posts]
+    assert len(texts) == len(set(texts))                                # nessun messaggio identico ripetuto
+
+
+def test_migration_never_stops_the_job():
+    """Database senza PRAGMA (o con la colonna già presente): la migrazione non solleva mai."""
+    from anas_bot.db import migrate
+
+    class NoPragma:
+        def __init__(self):
+            self.sql = []
+
+        def query(self, sql, params=()):
+            self.sql.append(sql)
+            if sql.startswith("PRAGMA"):
+                raise D1Error("D1 HTTP 400: not authorized")
+            if sql.startswith("ALTER"):
+                raise D1Error("D1 HTTP 400: duplicate column name: want_all")
+            return []
+    b = NoPragma()
+    assert migrate(b) == []                                 # colonna già presente: nessun errore, niente aggiunto
+    assert any(s.startswith("ALTER TABLE users ADD COLUMN want_all") for s in b.sql)
+
+    class Fresh(NoPragma):
+        def query(self, sql, params=()):
+            self.sql.append(sql)
+            if sql.startswith("PRAGMA"):
+                return [{"name": "user_id"}]
+            return []
+    assert migrate(Fresh()) == ["users.want_all"]           # colonna mancante: aggiunta

@@ -12,7 +12,7 @@ def wants_category(user: User, o: Ordinanza) -> bool:
         return user.want_closures
     if o.category == SPEED:
         return user.want_speed
-    return False
+    return user.want_all  # cantieri, restringimenti, sensi unici, limiti temporanei...
 
 
 def matches(user: User, o: Ordinanza, unknown_province_fallback: bool = True) -> bool:

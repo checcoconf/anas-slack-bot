@@ -66,7 +66,7 @@ class _FakeAnas:
         self.robots = RobotsPolicy.allow_all(UA)
         self.calls = []
 
-    def _throttle(self):
+    def _throttle(self, what=""):
         pass
 
     class session:  # noqa: N801 - basta un .get/.post statici per i test
@@ -127,3 +127,21 @@ def test_robots_disallowing_ordinances_is_respected():
     lc.load_robots()
     with pytest.raises(TransientError):
         lc.search_page("BA", date(2026, 11, 2), 1)
+
+
+def test_session_cookies_survive_between_runs(tmp_path):
+    """Il cookie di sessione del sito si conserva nel database: il giro dopo non rilegge la pagina iniziale."""
+    from anas_bot.anas.client import AnasClient
+    from anas_bot.anas.listing import ListingClient
+    from anas_bot.db import Database
+    db = Database.local(str(tmp_path / "c.sqlite3"))
+    anas = AnasClient("https://www.stradeanas.it/x?ord_id={id}", "t", 0)
+    lc = ListingClient(anas)
+    assert lc.restore_cookies(db) is False and lc._primed is False      # primo giro: niente da riprendere
+    anas.session.cookies.set("cookiesession1", "ABC123", domain="www.stradeanas.it")
+    anas.session.cookies.set("altro", "x", domain="example.org")          # di un altro sito: non si salva
+    lc.save_cookies(db)
+    anas2 = AnasClient("https://www.stradeanas.it/x?ord_id={id}", "t", 0)
+    lc2 = ListingClient(anas2)
+    assert lc2.restore_cookies(db) is True and lc2._primed is True
+    assert {c.name: c.value for c in anas2.session.cookies} == {"cookiesession1": "ABC123"}

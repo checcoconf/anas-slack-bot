@@ -92,7 +92,8 @@ class AnasClient:
     def url_for(self, ord_id: int) -> str:
         return self.url_template.format(id=ord_id)
 
-    def _throttle(self) -> None:
+    def _throttle(self, what: str = "") -> None:
+        """Pausa prima di una richiesta; `what` descrive la richiesta nel log (es. "ricerca BA pagina 1")."""
         # rispetta sia la nostra pausa sia l'eventuale Crawl-delay dichiarato nel robots.txt;
         # la pausa varia un po' a caso: un intervallo sempre identico al millisecondo è un'altra firma da bot
         delay = max(self.delay, self.robots.crawl_delay()) * random.uniform(1.0, 1.4)
@@ -103,6 +104,7 @@ class AnasClient:
             self.ledger.before_request()  # può aspettare ancora, o fermare il giro (BudgetExhausted)
         self._last_request = time.monotonic()
         self.requests_made += 1
+        log.info("Richiesta ad ANAS n. %d del giro: %s", self.requests_made, what or "?")
 
     def fetch_pdf(self, ord_id: int) -> bytes | None:
         """Bytes del PDF, None se l'ordinanza non esiste. TransientError se il sito non risponde bene."""
@@ -110,7 +112,7 @@ class AnasClient:
         if not self.robots.allowed(url):
             log.warning("robots.txt vieta %s: non lo scarico", url)
             return None
-        self._throttle()
+        self._throttle(f"PDF {ord_id}")
         try:
             r = self.session.get(url, timeout=self.timeout, allow_redirects=True)
         except requests.RequestException as exc:

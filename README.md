@@ -128,16 +128,20 @@ Scheda **Variables** (*New repository variable*):
 
 Gli utenti non installano nulla:
 1. entrano nel canale e ricevono il benvenuto con il pulsante 🗺️ **Scegli le zone**;
-2. scelgono le zone e i tipi di avviso dai menu;
+2. scelgono le zone e i tipi di avviso dai menu: chiusure e aperture, limiti permanenti e, per chi vuole proprio tutto, **anche cantieri e restringimenti** (tutte le altre ordinanze delle stesse zone, titolo "🚧 LAVORI E LIMITAZIONI"; spenta di default, con Tutta Italia sono decine al giorno);
 3. ricevono subito un **riepilogo delle ordinanze già in vigore** nelle zone scelte (le 30 più recenti; arriva al primo giro del job, entro un'ora) e da quel momento solo le novità, in privato. Cambiando zone arriva il riepilogo delle zone nuove, senza ripetere ciò che hanno già avuto.
 
 Possono cambiare le zone o mettere in pausa dalla scheda **Home** dell'app o con i comandi `/anas` (`/anas stato`, `/anas pausa`, `/anas riprendi`, `/anas aiuto`). Se escono dal canale gli avvisi si fermano, ma le preferenze restano salvate.
+
+Il filtro "utili per Waze" è una classificazione automatica in **beta**: può perdere qualche ordinanza o mandarne qualcuna non pertinente; l'avviso compare nel modulo, nella scheda Home e nel benvenuto. I testi per la pagina dell'app su api.slack.com (privacy, fonte dei dati, contatto) sono in `docs/app-slack.md`.
 
 ## Modalità "solo app" (senza canale)
 
 Se `SLACK_CHANNEL_IDS` è vuota, il bot non usa nessun canale di iscrizione: gli editor lo trovano tra le **App** di Slack, scelgono le zone e da quel momento ricevono gli avvisi in privato. Slack apre l'app sulla scheda **Messaggi**, vuota: la prima volta il bot ci manda il benvenuto con il pulsante 🗺️ **Scegli le zone** (una volta sola); le zone si cambiano poi dalla scheda **Home**. Niente riallineamento dei membri. È la modalità pensata per il workspace ufficiale: un'app che ognuno attiva se vuole.
 
 Il canale admin può stare in un altro workspace (per esempio quello di test): basta mettere nel secret `ADMIN_SLACK_BOT_TOKEN` il token del bot di quel workspace; `ADMIN_CHANNEL_ID` resta l'ID del canale lì.
+
+I testi da incollare nelle pagine *Info* e *Security & Compliance* dell'app sono in `docs/app-slack.md`.
 
 ## Canali iscritti (es. #chiusure_autostrade)
 
@@ -150,13 +154,14 @@ Un canale può ricevere le chiusure e riaperture di certe zone come se fosse un 
 - **Dopo un'interruzione si riparte da dove ci si era fermati**, sia per ANAS sia per Slack: il cursore e la coda stanno in D1. Se l'arretrato è grande, il job prosegue nello stesso giro finché ha tempo.
 - **Come trova le ordinanze nuove senza farsi bloccare.** Il firewall di ANAS (FortiWeb) mette in quarantena (circa 10 minuti) chi fa troppe richieste in poco tempo (collaudo del 03/11/2026: 9 in 27 secondi da un indirizzo, 6 in 90 minuti da un altro); e la ricerca "tutta Italia" non esiste, il sito si rifiuta di elencare più di 1.000 risultati. Per questo il giro è **lungo e lento**: parte una volta l'ora, dura circa 50 minuti e fa **una richiesta ogni 4-5 minuti** (`REQUEST_DELAY_SECONDS`, default 240), qualunque sia: 13-15 richieste all'ora, mai raffiche e mai giri accodati. La soglia osservata il 03-04/11/2026 è di circa 14-20 richieste per ora scorrevole (`MAX_REQUESTS_PER_HOUR`, default 10, contate attraverso i giri). Solo la pagina di blocco del firewall ("Web Page Blocked", con qualunque codice HTTP) ferma il bot per un'ora; una connessione chiusa o un timeout sono errori di rete, si salta la struttura e si riprova al giro dopo. Ogni richiesta apre una connessione nuova (`Connection: close`): quella tenuta aperta per 4-5 minuti veniva chiusa in silenzio dalla rete di GitHub e sembrava un blocco.
   - legge le 23 strutture una dopo l'altra, a rotazione: per ciascuna la prima pagina (5 ordinanze, dalla più recente) e la seconda solo se la prima era tutta nuova; se anche la seconda lo era, al giro dopo quella struttura parte con una pagina in più. Quando il tempo finisce, il giro dopo riparte dalla prima struttura non letta;
-  - **urgenze in nazionale** (`NATIONAL_SEARCHES`): prima della rotazione, a ogni giro, una ricerca su tutta Italia filtrata per causa (per esempio *Fenomeni naturali*: frane, inondazioni, neve, nebbia; o il dettaglio *Ripristino viabilità per emergenze*). Il sito elenca al massimo 1.000 risultati per ricerca, quindi vale solo per le cause piccole (il 03/11/2026: Fenomeni naturali 211, Gestione della viabilità 2.024); se una sfora, il bot la spegne per il giorno e avvisa. Così le urgenze arrivano entro l'ora da qualunque regione, mentre i cantieri (4-5 giorni di preavviso) seguono la rotazione. Formato: `CHIAVE=causa/dettaglio/nome;...` con i valori che il sito manda nel modulo, `*` = tutti;
   - i messaggi Slack partono subito dopo ogni struttura, non alla fine dell'ora;
   - **di notte (0-6) lettura profonda**: 4 pagine per struttura invece di 1, allo stesso ritmo (`LISTING_DEEP_PAGES`, `LISTING_DEEP_HOURS`). Il sito ordina per inizio validità, non per pubblicazione, e un'ordinanza nuova può stare in 2ª-4ª pagina: così arriva al più tardi la mattina dopo, invece di mai. Le ordinanze vecchie più in basso restano mute grazie all'ID "spartiacque";
-  - al massimo 3 PDF per giro (`MAX_PDF_PER_RUN`): le altre ordinanze che ne hanno bisogno slittano al giro dopo;
+  - **i PDF solo di notte** (nelle ore della lettura profonda, al massimo `MAX_PDF_PER_RUN` per giro): di giorno il budget va tutto alle prime pagine, e una chiusura nuova parte subito dal riepilogo dell'elenco, con la regione della sua struttura; proroghe e revoche, che senza PDF non si capiscono, aspettano la notte;
+  - **cookie di sessione conservato** tra un giro e l'altro (nel database): la pagina iniziale del sito non si rilegge ogni ora, solo se il sito non riconosce più il cookie (risposta 500);
+  - ogni richiesta ad ANAS ha la sua riga nel log (`Richiesta ad ANAS n. 7 del giro: ricerca CT pagina 1`): il conto è sempre verificabile;
   - robots.txt letto una volta al giorno;
   - **tetto per ora scorrevole** (`MAX_REQUESTS_PER_HOUR`, default 10: a regime il firewall ha bloccato la 12ª e la 14ª richiesta nell'ora), contato in D1 attraverso i giri: se GitHub fa partire un giro in ritardo e quello dopo gli si accoda, il secondo aspetta o si ferma invece di riempire l'ora due volte (è così che sono scattati i blocchi serali del 03/11/2026).
-  Un'ordinanza nuova in prima pagina arriva quindi entro un ciclo delle 23 strutture, cioè **circa 2 ore**; una che il sito mette più in basso, la mattina dopo.
+  Di giorno, con 10 richieste l'ora, si leggono 9-10 strutture l'ora: un'ordinanza nuova in prima pagina arriva entro un ciclo delle 23 strutture, cioè **2 ore e mezza al massimo**; una che il sito mette più in basso, la mattina dopo. (Le ricerche nazionali filtrate per causa, provate il 03-04/11/2026, sono state tolte: frane ed emergenze sono rare e note da altri canali, e costavano il 20% del budget senza trovare niente.)
 - **Se il firewall blocca lo stesso**, il bot riconosce la pagina "Web Page Blocked" e **si ferma subito**: nessun nuovo tentativo, nessun canale di riserva, e per un'ora (`BLOCK_PAUSE_MINUTES`) nessuna richiesta ad ANAS. Insistere durante la quarantena la allunga; un blocco non "alimentato" scade da solo. Arriva un avviso 🧱 nel canale admin. Vale anche per `collaudo/elenco.py`, che ora va a 15 secondi per richiesta e si ferma al primo blocco.
 - **Come classifica.** Usa il riepilogo strutturato dell'elenco (tratta, corsie, provvedimenti, destinatari, date). Le regole sono state scritte sul vocabolario reale di ANAS: 77 tipi di provvedimento, raccolti in `anas_bot/anas/vocabolario.py`.
   - ⛔ è chiusura: *chiusura al traffico*, *divieto di transito*, *interdizione*, *sospensione della circolazione*, se valgono **per tutti** e su tutta la carreggiata (o su una rampa/svincolo);

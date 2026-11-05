@@ -72,7 +72,7 @@ def test_real_bari_page():
 
 
 def test_vocabulary_covers_real_measures():
-    assert len(KNOWN_MEASURES) == 77
+    assert len(KNOWN_MEASURES) == 78  # 77 dal collaudo del 02/11 + "direzione obbligatoria sinistra e destra" (04/11)
     assert unknown_measures(["chiusura al traffico", "limite di velocita 40Km/h".lower()]) == []
     assert unknown_measures(["chiusura notturna a targhe alterne"]) == ["chiusura notturna a targhe alterne"]
 
@@ -124,6 +124,13 @@ def test_every_structure_has_regions_and_all_anas_regions_are_covered():
 
 
 # --- giro completo con un elenco finto ------------------------------------------------------
+
+def _useful(db):
+    """Le ordinanze in coda utili per Waze (chiusure, aperture, limiti): le altre ci passano pure, per chi
+    ha scelto di ricevere tutto, ma qui non interessano."""
+    from anas_bot.db import RELEVANT
+    return [o for o in db.pending_ordinanze() if o.category in RELEVANT]
+
 
 def _closure(id_, start, end="30/11/2026", numero="900/2026/BA"):
     return _rec(id_, _riep("SS 16", "su <strong>tutte le corsie</strong>,", ["chiusura al traffico"],
@@ -184,7 +191,7 @@ def _install(p, listing):
 def test_old_ordinances_are_never_notified(env):
     cfg, db, listing, src = env
     _install(ListingPoller(db, listing, src, cfg), listing)
-    assert db.pending_ordinanze() == []                 # 13 chiusure vecchie: nessuna in coda
+    assert _useful(db) == []                 # 13 chiusure vecchie: nessuna in coda
     assert src.requests == []                           # e nessun PDF scaricato per le vecchie
 
 
@@ -195,7 +202,7 @@ def test_new_closure_at_top_of_list_is_notified_next_run(env):
     listing.pages["MI"].insert(0, _closure(212000, "03/11/2026", numero="11/2026/MI"))  # numero BASSO
     r = p.run(date(2026, 11, 2))
     assert r.new == 1 and r.relevant == 1
-    assert [o.ord_id for o in db.pending_ordinanze()] == [212000]
+    assert [o.ord_id for o in _useful(db)] == [212000]
     assert ("MI", 1) in listing.calls                   # trovata dalla lettura veloce della prima pagina
 
 
@@ -213,7 +220,7 @@ def test_closure_starting_from_install_day_is_notified_during_first_scan(env):
     cfg, db, listing, src = env
     listing.pages["BA"].insert(0, _closure(400, "01/11/2026", "03/11/2026"))
     ListingPoller(db, listing, src, cfg).run(date(2026, 11, 1))
-    assert [o.ord_id for o in db.pending_ordinanze()] == [400]
+    assert [o.ord_id for o in _useful(db)] == [400]
 
 
 def test_number_channel_restarts_from_newest_listing_id(env):
@@ -233,7 +240,7 @@ def test_extension_inherits_from_original_closure(env, monkeypatch):
     proroga = {"ID": "213700", "TIPO_ORDINANZA": "Proroga", "NUMERO_ORDINANZA": "950/2026/BA", "COMPARTIMENTO": "Bari",
                "CAUSA": "Cantiere", "CAUSA_DETT": "", "RIEPILOGO": "", "PROROGA_DATA": "15/12/2026"}
     listing.pages["BA"].insert(0, proroga)
-    p.run(date(2026, 11, 2))
+    p.run(date(2026, 11, 2), hour=3)   # di notte: i PDF si leggono
     o = db.get_ordinanza(213700)
     assert o.category == CLOSURE and o.extension and o.end_date == "2026-12-15" and o.roads == ["SS16"]
     assert o.number == "950/2026/BA"
@@ -263,9 +270,10 @@ def test_real_proroga_of_lane_restriction_is_not_notified(env):
                                    "COMPARTIMENTO": "Autostrada del Mediterraneo", "CAUSA": "Cantiere",
                                    "CAUSA_DETT": "Gestione opere di sicurezza", "RIEPILOGO": "",
                                    "PROROGA_DATA": "30/11/2026"})
-    r = p.run(date(2026, 11, 2))
+    cfg.listing_deep_pages = 1
+    r = p.run(date(2026, 11, 2), hour=3)   # di notte: i PDF si leggono
     o = db.get_ordinanza(213628)
-    assert r.new == 1 and r.relevant == 0 and db.pending_ordinanze() == []
+    assert r.new == 1 and r.relevant == 0 and _useful(db) == []
     assert o.category == OTHER and o.extension and o.end_date == "2026-11-30" and o.number == "621/2026/UC"
 
 
@@ -277,7 +285,7 @@ def test_listing_upgrades_ordinance_misclassified_by_number_channel(env):
     db.save_ordinanza(parse_ordinanza(555, s.LANE_ONLY), "")    # canale a numeri: "altro"
     listing.pages["BA"].insert(0, _closure(555, "03/11/2026"))
     r = p.run(date(2026, 11, 2))
-    assert r.upgraded == 1 and [o.ord_id for o in db.pending_ordinanze()] == [555]
+    assert r.upgraded == 1 and [o.ord_id for o in _useful(db)] == [555]
 
 
 def test_unknown_measures_are_reported(env):
@@ -320,7 +328,7 @@ def test_firewall_block_stops_the_run_and_pauses_the_bot(env):
     listing.search_page = real
     listing.pages["MI"].insert(0, _closure(212000, "03/11/2026", numero="11/2026/MI"))
     r = p.run(date(2026, 11, 2), now=1000.0 + 61 * 60)   # un'ora dopo: si riprende da soli
-    assert not r.blocked and r.new == 1 and [o.ord_id for o in db.pending_ordinanze()] == [212000]
+    assert not r.blocked and r.new == 1 and [o.ord_id for o in _useful(db)] == [212000]
 
 
 def test_pdf_cap_per_run_defers_the_rest_to_next_run(env):
@@ -329,13 +337,31 @@ def test_pdf_cap_per_run_defers_the_rest_to_next_run(env):
     cfg.max_pdf_per_run = 2
     p = ListingPoller(db, listing, src, cfg)
     _install(p, listing)
-    for i in range(4):  # 4 chiusure nuove: ognuna vuole il PDF per le province
+    for i in range(4):  # 4 chiusure nuove: di notte ognuna vuole il PDF per le province
         listing.pages["BA"].insert(0, _closure(212000 + i, "03/11/2026"))
-    r = p.run(date(2026, 11, 2))
+    cfg.listing_deep_pages = 1
+    r = p.run(date(2026, 11, 2), hour=3)
     assert r.new == 2 and r.deferred == 2 and len(src.requests) == 2
-    r = p.run(date(2026, 11, 2))
+    r = p.run(date(2026, 11, 2), hour=3)
     assert r.new == 2 and r.deferred == 0 and len(src.requests) == 4
-    assert sorted(o.ord_id for o in db.pending_ordinanze()) == [212000, 212001, 212002, 212003]
+    assert sorted(o.ord_id for o in _useful(db)) == [212000, 212001, 212002, 212003]
+
+
+def test_by_day_closures_go_out_without_pdf_and_extensions_wait_for_the_night(env):
+    """Di giorno il budget va alle prime pagine: una chiusura nuova parte subito senza PDF (regione della
+    struttura, provincia non determinata); una proroga, che senza PDF non si capisce, aspetta la notte."""
+    cfg, db, listing, src = env
+    p = ListingPoller(db, listing, src, cfg)
+    _install(p, listing)
+    cfg.listing_deep_pages = 1
+    listing.pages["BA"].insert(0, _closure(213700, "03/11/2026"))
+    listing.pages["BA"].insert(0, {**BARI["results"][0], "ID": "213701", "NUMERO_ORDINANZA": "900/2026/BA"})  # proroga
+    r = p.run(date(2026, 11, 2), hour=14)
+    assert r.new == 1 and r.relevant == 1 and r.deferred == 1 and src.requests == []
+    assert [o.ord_id for o in _useful(db)] == [213700]
+    src.docs[213701] = s.EXTENSION_BARI
+    r = p.run(date(2026, 11, 3), hour=3)                      # notte: la proroga si legge dal PDF
+    assert r.deferred == 0 and src.requests == [213701]
 
 
 def test_many_new_ordinances_are_read_across_runs(env):
@@ -373,7 +399,7 @@ def test_search_retries_once_with_fresh_session_after_http_500():
             return answers.pop(0)
 
     from anas_bot.anas.robots import RobotsPolicy
-    lc = L.ListingClient(type("Anas", (), {"timeout": 1, "session": Session(), "_throttle": lambda self: None,
+    lc = L.ListingClient(type("Anas", (), {"timeout": 1, "session": Session(), "_throttle": lambda self, what="": None,
                                            "robots": RobotsPolicy.allow_all("t")})())
     primes = []
     lc.prime = lambda: primes.append(1)
@@ -398,7 +424,7 @@ def test_block_page_on_search_is_recognized_whatever_the_status():
         class Session:
             def post(self, *a, **k):
                 return Resp(status, "<html><h1>Web Page Blocked!</h1><p>Attack ID 20000046</p></html>")
-        lc = L.ListingClient(type("Anas", (), {"timeout": 1, "session": Session(), "_throttle": lambda self: None,
+        lc = L.ListingClient(type("Anas", (), {"timeout": 1, "session": Session(), "_throttle": lambda self, what="": None,
                                                "robots": RobotsPolicy.allow_all("t")})())
         lc._primed = True
         with pytest.raises(BlockedError):
@@ -416,7 +442,7 @@ def test_prime_is_remembered_only_when_the_page_was_really_read():
     class Session:
         def get(self, *a, **k):
             return Resp(502)
-    lc = L.ListingClient(type("Anas", (), {"timeout": 1, "session": Session(), "_throttle": lambda self: None,
+    lc = L.ListingClient(type("Anas", (), {"timeout": 1, "session": Session(), "_throttle": lambda self, what="": None,
                                            "robots": RobotsPolicy.allow_all("t")})())
     with pytest.raises(TransientError):
         lc.prime()
@@ -477,7 +503,7 @@ def test_night_deep_read_finds_new_closure_below_first_page(env):
     assert [c[1] for c in listing.calls if c[0] == "BA"] == [1]
     listing.calls.clear()
     r = p.run(date(2026, 11, 3), hour=3)                           # di notte: 4 pagine
-    assert r.relevant == 1 and [o.ord_id for o in db.pending_ordinanze()] == [212500]
+    assert r.relevant == 1 and [o.ord_id for o in _useful(db)] == [212500]
     assert r.silent == r.new - 1                                   # le vecchie sotto lo spartiacque: mute
     assert [c[1] for c in listing.calls if c[0] == "BA"] == [1, 2, 3, 4]
     assert db.get("listing_fast_carry_BA") == "0"                  # la profondità notturna non lascia "carry"
@@ -528,7 +554,7 @@ def test_one_structure_in_error_does_not_stop_the_others(env):
     listing.pages["MI"].insert(0, _closure(212000, "03/11/2026", numero="11/2026/MI"))
     r = p.run(date(2026, 11, 2))
     assert r.skipped == ["BA"] and not r.error and not r.blocked
-    assert [o.ord_id for o in db.pending_ordinanze()] == [212000]   # Milano arriva lo stesso
+    assert [o.ord_id for o in _useful(db)] == [212000]   # Milano arriva lo stesso
 
 
 def test_three_structures_in_error_in_a_row_end_the_run_without_pause(env):
@@ -587,7 +613,7 @@ def test_structure_empty_at_install_notifies_its_first_future_ordinance(env):
     assert db.get("listing_done_MI") and db.get("listing_watermark_MI") == "0"
     listing.pages["MI"].insert(0, _closure(212000, "20/10/2026", numero="11/2026/MI"))
     r = p.run(date(2026, 11, 2))
-    assert r.relevant == 1 and [o.ord_id for o in db.pending_ordinanze()] == [212000]
+    assert r.relevant == 1 and [o.ord_id for o in _useful(db)] == [212000]
 
 
 def test_hourly_ledger_waits_and_then_gives_up(tmp_path):
@@ -614,46 +640,3 @@ def test_hourly_ledger_waits_and_then_gives_up(tmp_path):
         strict.before_request()
 
 
-def test_national_search_runs_every_run_before_the_rotation(env):
-    """Le urgenze in nazionale: la frana di Milano arriva al giro stesso, anche se MI non è di turno."""
-    cfg, db, listing, src = env
-    cfg.national_searches = "FEN=Fenomeni naturali/*/Frane e simili"
-    cfg.listing_structures_per_run = 1  # per giro solo una struttura a rotazione
-    p = ListingPoller(db, listing, src, cfg)
-    p.run(date(2026, 11, 1))  # presa visione: NAZ-FEN e BA
-    frana = _closure(212000, "03/11/2026", numero="11/2026/MI")
-    frana["CAUSA"] = "Fenomeni naturali"
-    listing.pages["MI"].insert(0, frana)
-    listing.calls.clear()
-    r = p.run(date(2026, 11, 2))
-    assert listing.calls[0] == (ITALY, 1)                       # prima la nazionale...
-    assert [c for c in listing.calls if c[0] != ITALY] == [("MI", 1)]  # ...poi la struttura di turno
-    assert r.relevant == 1 and [o.ord_id for o in db.pending_ordinanze()] == [212000]
-    assert db.get("listing_fast_rr") == "0"                     # la nazionale non fa avanzare la rotazione
-
-
-def test_national_search_over_the_cap_is_switched_off_for_the_day(env):
-    cfg, db, listing, src = env
-    cfg.national_searches = "VIA=Gestione della viabilità"
-    real = listing.search_page
-
-    def capped(code, day, page, causa="*", causa_dett="*"):
-        if code == ITALY:
-            return {"esito": False, "tot_pagine": 0, "tot_record": 2024, "results": [], "messaggio": "limite massimo"}
-        return real(code, day, page, causa, causa_dett)
-    listing.search_page = capped
-    p = ListingPoller(db, listing, src, cfg)
-    r = p.run(date(2026, 11, 2))
-    assert r.national_off and "2024" in r.national_off[0] and not r.error
-    assert db.get("listing_nat_off_NAZ-VIA") == "2026-11-02"
-    listing.calls.clear()
-    p.run(date(2026, 11, 2))
-    assert all(c[0] != ITALY for c in listing.calls)            # per oggi non la riprova
-
-
-def test_national_searches_config_parsing():
-    cfg = Config()
-    cfg.national_searches = "FEN=Fenomeni naturali;EMER=*/Ripristino viabilità per emergenze/Emergenze; x=a/b"
-    assert cfg.national() == [("FEN", "Fenomeni naturali", "*", "FEN"),
-                              ("EMER", "*", "Ripristino viabilità per emergenze", "Emergenze"),
-                              ("X", "a", "b", "x")]

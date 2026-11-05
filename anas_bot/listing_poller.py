@@ -6,9 +6,6 @@ vigore il 03/11/2026) e il suo firewall mette in quarantena chi fa più di una m
 (collaudo del 03/11/2026: bloccati dopo 9 richieste in 27 secondi da un indirizzo, e dopo 6 richieste
 in 90 minuti da un altro). Per questo ogni giro fa pochissime richieste, distanziate:
 
-0. URGENZE IN NAZIONALE (NATIONAL_SEARCHES): a ogni giro, prima di tutto, le ricerche su tutta Italia
-   filtrate per causa (frane, emergenze...): restano sotto i 1.000 risultati e la prima pagina ha le
-   più recenti di tutte le regioni. Così le urgenze arrivano entro l'ora, ovunque siano.
 1. LETTURA VELOCE A ROTAZIONE: il giro dura quasi un'ora e fa una richiesta ogni ~4 minuti
    (REQUEST_DELAY_SECONDS): struttura dopo struttura, 1-2 pagine da 5 ciascuna, dalla più recente,
    finché il tempo (JOB_TIME_BUDGET_MINUTES) finisce; il giro dopo riparte dalla prima non letta.
@@ -16,8 +13,10 @@ in 90 minuti da un altro). Per questo ogni giro fa pochissime richieste, distanz
    quella struttura parte con una pagina in più. I messaggi Slack partono dopo ogni struttura.
    Di notte (LISTING_DEEP_HOURS) legge LISTING_DEEP_PAGES pagine per struttura, allo stesso ritmo:
    il sito ordina per inizio validità, e un'ordinanza nuova può stare in 2ª-4ª pagina.
-2. PDF: al massimo MAX_PDF_PER_RUN per giro (proroghe, revoche, province delle chiusure);
-   le ordinanze che ne hanno bisogno oltre il tetto restano "nuove" e slittano al giro dopo.
+2. PDF: solo nelle ore della lettura profonda (di notte), al massimo MAX_PDF_PER_RUN per giro: proroghe,
+   revoche e province esatte delle chiusure. Di giorno il budget va tutto alle prime pagine, così il giro
+   d'Italia dura 2-3 ore: una chiusura nuova parte subito, con la regione della sua struttura (la
+   provincia, quando non è nel riepilogo, resta "non determinata"); proroghe e revoche aspettano la notte.
 3. BLOCCO: alla prima pagina di blocco del firewall il giro si ferma e il bot non fa richieste
    ad ANAS per BLOCK_PAUSE_MINUTES. Insistere durante la quarantena la allunga soltanto.
 4. BUDGET ORARIO: le richieste si contano per ora scorrevole, attraverso i giri (anas/budget.py):
@@ -43,7 +42,6 @@ from datetime import date
 from .anas.budget import BudgetExhausted
 from .anas.client import BlockedError, TransientError
 from .anas.listing import (
-    ITALY,
     ListingClient,
     ListingError,
     Structure,
@@ -81,7 +79,6 @@ class ListingResult:
     max_id: int = 0  # numero più alto visto: tiene vicino al presente il canale a numeri di riserva
     deferred: int = 0  # ordinanze rimandate al giro dopo perché il tetto dei PDF era esaurito
     skipped: list[str] = field(default_factory=list)  # strutture saltate per un errore di rete
-    national_off: list[str] = field(default_factory=list)  # ricerche nazionali spente oggi (sforano i 1.000)
     error: str = ""
     broken: bool = False  # il formato dell'elenco è cambiato
     blocked: bool = False  # il firewall ci ha bloccati (o siamo ancora in pausa dopo un blocco)
@@ -95,12 +92,13 @@ class ListingPoller:
         self.source = source  # PdfSource: per proroghe/revoche e per trovare le province
         self.cfg = cfg
         self.pdf_budget = cfg.max_pdf_per_run  # PDF ancora scaricabili in questo giro
+        self.deep = False  # True nelle ore notturne (LISTING_DEEP_HOURS): più pagine, e i PDF
         self.after_structure = None  # callback senza argomenti: il job manda i messaggi in coda (giro lungo)
         self.watermark = 0  # ID più alto visto al primo giro: sotto è "già in vigore prima del bot"
 
     def _fetch_text(self, ord_id: int) -> str | None:
-        """Testo del PDF, oppure None se il tetto dei PDF per giro è esaurito (si riprova al giro dopo)."""
-        if self.pdf_budget <= 0:
+        """Testo del PDF, oppure None fuori dalle ore notturne o a tetto dei PDF esaurito (si riprova dopo)."""
+        if not self.deep or self.pdf_budget <= 0:
             return None
         self.pdf_budget -= 1
         return self.source.fetch_text(ord_id)
@@ -179,7 +177,7 @@ class ListingPoller:
                 return  # PDF non ancora pubblicato, o tetto dei PDF esaurito: riprova al giro dopo
         silent = bool(old) and not (o.start_date and o.start_date >= installed)
         if not silent:
-            if o.category in RELEVANT and not text:  # utile: le province dai destinatari del PDF
+            if o.category in RELEVANT and not text and self.deep:  # di notte: le province dai destinatari del PDF
                 if self.pdf_budget <= 0:
                     res.deferred += 1
                     return  # tetto dei PDF esaurito: la rimandiamo intera al giro dopo
@@ -207,24 +205,15 @@ class ListingPoller:
         new = 0
         for rec in records:
             ord_id = int(rec["ID"])
-            rst = self._record_structure(rec) if st.national else st
             if ord_id in known:
                 if not baseline:  # il canale a numeri l'aveva scartata? l'elenco può correggerla
-                    o = record_to_ordinanza(rec, rst.label, self.source.url_for(ord_id))
+                    o = record_to_ordinanza(rec, st.label, self.source.url_for(ord_id))
                     if o and o.category in RELEVANT and self.db.upgrade_from_listing(o):
                         res.upgraded += 1
                 continue
             new += 1
-            self._process(rec, rst, baseline, installed, res)
+            self._process(rec, st, baseline, installed, res)
         return new
-
-    @staticmethod
-    def _record_structure(rec: dict) -> Structure:
-        """La struttura di un risultato della ricerca "tutta Italia": sigla dal numero (723/2026/BA),
-        nome dal campo COMPARTIMENTO."""
-        number = (rec.get("NUMERO_ORDINANZA") or "").replace("\\/", "/")
-        code = number.rsplit("/", 1)[-1].upper() if number.count("/") == 2 else ""
-        return Structure(code or ITALY, rec.get("COMPARTIMENTO") or "Italia")
 
     # --- il giro --------------------------------------------------------------------
     def run(self, today: date, deadline: float | None = None, now: float | None = None,
@@ -287,12 +276,8 @@ class ListingPoller:
         off = int(self.db.get("listing_fast_rr", "0") or 0) % n
         k = min(self.cfg.listing_structures_per_run, n)
         done, streak, failed = 0, 0, []
-        # le ricerche nazionali per le urgenze vanno a ogni giro, prima della rotazione, senza farla avanzare
-        national = [Structure("NAZ-" + key, label, causa, dett, national=True)
-                    for key, causa, dett, label in self.cfg.national()
-                    if self.db.get(f"listing_nat_off_NAZ-{key}") != today.isoformat()]
         try:
-            for st in national + [structures[(off + i) % n] for i in range(k)]:
+            for st in (structures[(off + i) % n] for i in range(k)):
                 if late():
                     log.info("Elenco: tempo del giro finito, %s e seguenti al prossimo giro", st.code)
                     break
@@ -300,18 +285,10 @@ class ListingPoller:
                     self._fast_structure(st, today, installed, res)
                 except (BlockedError, BudgetExhausted):
                     raise
-                except ListingError as exc:
-                    if not st.national:
-                        raise
-                    # la ricerca nazionale sfora i 1.000 risultati (o ha cambiato forma): spenta per oggi
-                    self.db.set(f"listing_nat_off_{st.code}", today.isoformat())
-                    res.national_off.append(f"{st.label}: {exc}")
-                    log.warning("Ricerca nazionale %s spenta per oggi: %s", st.label, exc)
-                    continue
                 except TransientError as exc:
                     # rete o sito in errore su questa struttura: si passa alla successiva; se capita
                     # due volte di fila il sito sta rifiutando tutto e si chiude il giro (riprova all'ora dopo)
-                    done += 0 if st.national else 1
+                    done += 1
                     streak += 1
                     failed.append(st.code)
                     log.warning("Elenco: struttura %s saltata in questo giro: %s", st.code, exc)
@@ -320,7 +297,7 @@ class ListingPoller:
                         # Non è un blocco del firewall (quello manda la sua pagina): niente pausa di un'ora.
                         raise TransientError(f"il sito non risponde ({', '.join(failed)}): {exc}") from exc
                     continue
-                done += 0 if st.national else 1
+                done += 1
                 streak = 0
                 if self.after_structure:
                     self.after_structure()  # i messaggi partono subito, non alla fine dell'ora
@@ -335,7 +312,7 @@ class ListingPoller:
         carry_key = f"listing_fast_carry_{st.code}"
         carry = 0 if baseline else min(MAX_CARRY_PAGES, int(self.db.get(carry_key, "0") or 0))
         min_pages = max(self.cfg.listing_fast_pages_min, carry + 1)
-        if getattr(self, "deep", False) and not st.national:
+        if self.deep:
             min_pages = max(min_pages, self.cfg.listing_deep_pages)
         max_pages = max(min_pages, self.cfg.listing_fast_pages_max + carry)
         page, pages, new, max_id = 1, 1, 0, 0

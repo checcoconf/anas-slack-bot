@@ -14,6 +14,7 @@ function toUser(row) {
     provinces: JSON.parse(row.provinces || "[]"),
     wantClosures: Boolean(row.want_closures),
     wantSpeed: Boolean(row.want_speed),
+    wantAll: Boolean(row.want_all),
     welcomedAt: row.welcomed_at,
   };
 }
@@ -49,13 +50,14 @@ export async function savePreferences(db, userId, p) {
     db.prepare(UPSERT).bind(userId, now()),
     db.prepare(
       "UPDATE users SET configured = 1, paused = 0, all_italy = ?, regions = ?, provinces = ?, " +
-        "want_closures = ?, want_speed = ?, updated_at = ? WHERE user_id = ?",
+        "want_closures = ?, want_speed = ?, want_all = ?, updated_at = ? WHERE user_id = ?",
     ).bind(
       p.allItaly ? 1 : 0,
       JSON.stringify([...p.regions].sort()),
       JSON.stringify([...p.provinces].sort()),
       p.wantClosures ? 1 : 0,
       p.wantSpeed ? 1 : 0,
+      p.wantAll ? 1 : 0,
       now(),
       userId,
     ),

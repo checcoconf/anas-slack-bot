@@ -84,11 +84,6 @@ class Config:
     listing_structures_per_run: int = 23  # strutture lette per giro: tutte, è il tempo (budget) a fermare il giro
     listing_fast_pages_min: int = 1  # pagine lette sempre
     listing_fast_pages_max: int = 2  # ...e massime, se continuano a comparire ordinanze nuove
-    # Ricerche nazionali per le urgenze, a ogni giro prima delle strutture: "CHIAVE=causa/dettaglio/nome;..."
-    # con i valori che il sito manda nei campi causa e causa_dett ("*" = tutti). Una ricerca nazionale
-    # funziona solo se resta sotto i 1.000 risultati (03/11/2026: Fenomeni naturali 211, Gestione della
-    # viabilità 2.024); se sfora, il bot la spegne per un giorno e avvisa.
-    national_searches: str = ""
     # Lettura profonda di notte (ANAS non pubblica, il ritmo resta lo stesso): più pagine per struttura,
     # per le ordinanze che il sito non mette in prima pagina (ordina per inizio validità, non per pubblicazione).
     listing_deep_pages: int = 4  # pagine lette sempre, per struttura, nelle ore "profonde"
@@ -98,18 +93,6 @@ class Config:
 
     welcome_existing_members: bool = True
     unknown_province_fallback: bool = True
-
-    def national(self) -> list[tuple[str, str, str, str]]:
-        """[(chiave, causa, causa_dett, nome)] dalle ricerche nazionali configurate."""
-        out = []
-        for item in (x.strip() for x in self.national_searches.split(";") if x.strip()):
-            key, _, rest = item.partition("=")
-            parts = [p.strip() for p in rest.split("/")]
-            causa = parts[0] if len(parts) > 0 and parts[0] else "*"
-            dett = parts[1] if len(parts) > 1 and parts[1] else "*"
-            label = parts[2] if len(parts) > 2 and parts[2] else key.strip()
-            out.append((key.strip().upper(), causa, dett, label))
-        return out
 
     def is_deep_hour(self, hour: int) -> bool:
         """True se l'ora locale (0-23) cade nella fascia della lettura profonda, es. "0-6" oppure "22-6"."""
@@ -154,7 +137,6 @@ class Config:
         c.listing_structures_per_run = max(1, _int("LISTING_STRUCTURES_PER_RUN", c.listing_structures_per_run))
         c.listing_fast_pages_min = _int("LISTING_FAST_PAGES_MIN", c.listing_fast_pages_min)
         c.listing_fast_pages_max = _int("LISTING_FAST_PAGES_MAX", c.listing_fast_pages_max)
-        c.national_searches = os.environ.get("NATIONAL_SEARCHES", c.national_searches).strip()
         c.listing_deep_pages = _int("LISTING_DEEP_PAGES", c.listing_deep_pages)
         c.listing_deep_hours = os.environ.get("LISTING_DEEP_HOURS", c.listing_deep_hours).strip()
         c.walk_always = _bool("WALK_ALWAYS", c.walk_always)

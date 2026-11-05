@@ -262,3 +262,35 @@ def test_digest_with_nothing_in_force_says_so(db, cfg):
     assert Digest(db, slack).run(TODAY) == 1
     assert "nessuna ordinanza" in slack.posts_to("U_Q")[0]["text"]
     assert Digest(db, slack).run(TODAY) == 0
+
+
+def test_want_all_receives_worksites_too_and_others_do_not(db, cfg):
+    """La terza voce "anche cantieri e restringimenti": chi la sceglie riceve anche le altre ordinanze
+    delle sue zone (titolo LAVORI E LIMITAZIONI); gli altri continuano a non vederle."""
+    _subscribe(db, "U_TUTTO", all_italy=True, want_all=True)
+    _subscribe(db, "U_SOLO", all_italy=True)
+    Poller(db, FakeSource({100: s.CLOSURE_SS614, 103: s.LANE_ONLY}), cfg).run_cycle()
+    slack = FakeSlack()
+    Notifier(db, slack).run(TODAY)
+    tutto = slack.posts_to("U_TUTTO")
+    assert len(tutto) == 1 and "LAVORI E LIMITAZIONI" in str(tutto[0]["blocks"]) and "STRADA CHIUSA" in str(tutto[0]["blocks"])
+    solo = slack.posts_to("U_SOLO")
+    assert len(solo) == 1 and "LAVORI" not in str(solo[0]["blocks"]) and "SS614" in solo[0]["text"]
+
+
+def test_want_all_column_is_added_to_an_old_database(tmp_path):
+    """Database creato prima della colonna want_all: il job la aggiunge da solo, una volta sola."""
+    import sqlite3
+    from anas_bot.db import LocalSqlite, migrate, schema_statements
+    path = str(tmp_path / "old.sqlite3")
+    con = sqlite3.connect(path)
+    for st in schema_statements():
+        con.execute(st.replace("    want_all INTEGER NOT NULL DEFAULT 0,  -- anche cantieri e restringimenti (tutte le altre ordinanze)\n", ""))
+    con.commit(); con.close()
+    b = LocalSqlite(path)
+    assert "want_all" not in {r["name"] for r in b.query("PRAGMA table_info(users)")}
+    assert migrate(b) == ["users.want_all"]
+    assert migrate(b) == []
+    db = Database(b)
+    db.ensure_user("U1")
+    assert db.get_user("U1").want_all is False

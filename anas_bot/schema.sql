@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS users (
     provinces TEXT NOT NULL DEFAULT '[]',
     want_closures INTEGER NOT NULL DEFAULT 1,
     want_speed INTEGER NOT NULL DEFAULT 1,
+    want_all INTEGER NOT NULL DEFAULT 0,  -- anche cantieri e restringimenti (tutte le altre ordinanze)
     welcomed_at REAL,
     updated_at REAL
 );

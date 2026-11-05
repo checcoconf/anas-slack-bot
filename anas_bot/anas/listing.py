@@ -98,17 +98,15 @@ class ListingError(Exception):
 
 @dataclass
 class Structure:
-    """Una lettura dell'elenco: di norma una struttura territoriale (BA, MI...), oppure una ricerca
-    nazionale filtrata per causa (area "*"), per le urgenze: frane, emergenze... (vedi listing_poller)."""
-    code: str  # chiave della lettura (BA, MI... oppure NAZ-FEN): è anche la chiave in D1
-    label: str  # nome nel menu, es. "Puglia", o della ricerca nazionale
+    """Una struttura territoriale dell'elenco (BA, MI...): il codice è anche la chiave in D1."""
+    code: str
+    label: str  # nome nel menu, es. "Puglia"
     causa: str = "*"  # filtro "Causa" della ricerca (il valore che manda il sito), "*" = tutte
     causa_dett: str = "*"  # filtro "Dettaglio causa", "*" = tutti
-    national: bool = False  # True: area "*" (tutta Italia), ha senso solo con un filtro che resti sotto i 1.000
 
     @property
     def area(self) -> str:
-        return ITALY if self.national else self.code
+        return self.code
 
 
 # --- Lettura del menu delle strutture -------------------------------------------
@@ -175,11 +173,35 @@ class ListingClient:
         self.last_total_records = 0
 
     def _get(self, url: str):
-        self.anas._throttle()
+        self.anas._throttle(url.rsplit("/", 1)[-1] or url)
         try:
             return self.session.get(url, timeout=self.anas.timeout)
         except Exception as exc:  # noqa: BLE001 - rete: riprovare al prossimo giro
             raise TransientError(f"pagina Ordinanze Web: {exc}") from exc
+
+    # Il cookie di sessione che il sito assegna aprendo la pagina viene conservato nel database tra un giro
+    # e l'altro: così la pagina iniziale (1 richiesta su 10) non si rilegge ogni ora. Se il cookie non vale
+    # più, la ricerca risponde 500 e la pagina si riapre da sola (vedi search_page).
+    COOKIES_KEY = "anas_cookies"
+
+    def restore_cookies(self, db) -> bool:
+        """Rimette nella sessione i cookie dell'ultimo giro; True se ce n'erano."""
+        try:
+            saved = json.loads(db.get(self.COOKIES_KEY, "") or "{}")
+        except ValueError:
+            saved = {}
+        if not isinstance(saved, dict) or not saved:
+            return False
+        for name, value in saved.items():
+            self.session.cookies.set(name, value, domain="www.stradeanas.it")
+        self._primed = True
+        log.info("Cookie di sessione ripresi dal giro precedente: pagina iniziale non riletta")
+        return True
+
+    def save_cookies(self, db) -> None:
+        jar = {c.name: c.value for c in self.session.cookies if "stradeanas" in (c.domain or "")}
+        if jar:
+            db.set(self.COOKIES_KEY, json.dumps(jar))
 
     def load_robots(self) -> RobotsPolicy:
         """Legge /robots.txt e imposta la policy condivisa (anche i PDF la rispettano).
@@ -268,7 +290,7 @@ class ListingClient:
             raise TransientError("robots.txt vieta la ricerca delle ordinanze: non interrogo il sito")
         if not self._primed:
             self.prime()
-        self.anas._throttle()
+        self.anas._throttle(f"ricerca {code} pagina {page}")
         data = {
             "action": "search_ordinanze", "page": str(page), "causa": causa or "*", "causa_dett": causa_dett or "*",
             "area_compartimentale": code, "strada": "*", "numero_ordinanza": "", "limitazioni": "*",
@@ -293,7 +315,7 @@ class ListingClient:
             log.warning("Elenco %s pagina %s: HTTP %s: %s. Riprovo", code, page, r.status_code,
                         describe_error_page(r.text))
             self.prime()
-            self.anas._throttle()
+            self.anas._throttle(f"ricerca {code} pagina {page} (secondo tentativo)")
         if r.status_code in (429, 500, 502, 503, 504):
             raise TransientError(f"elenco {code}: HTTP {r.status_code}")
         try:

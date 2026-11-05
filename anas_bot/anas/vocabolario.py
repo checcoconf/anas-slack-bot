@@ -1,7 +1,7 @@
 """Vocabolario dei provvedimenti ANAS: tutte le voci viste nell'elenco ufficiale.
 
 Rilevato il 02/11/2026 dal collaudo completo (collaudo/elenco.bat): 3.718 ordinanze in vigore,
-77 voci diverse. I numeri sono sostituiti da N ("limite di velocita 40Km/h" -> "limite di velocita Nkm/h").
+77 voci diverse (più quelle aggiunte dopo, una per riga con la data). I numeri sono sostituiti da N ("limite di velocita 40Km/h" -> "limite di velocita Nkm/h").
 
 Se in un'ordinanza nuova compare una voce che non è qui, il bot avvisa nel canale admin:
 vuol dire che ANAS ha introdotto un provvedimento nuovo e le regole in listing.py vanno controllate.
@@ -87,6 +87,7 @@ KNOWN_MEASURES: frozenset[str] = frozenset({
     'restringimento carreggiata autoveicoli',
     'veicoli che trasportano esplosivo o prodotti facilmente infiammabili',
     'direzione obbligatoria sinistra',
+    'direzione obbligatoria sinistra e destra',  # 04/11/2026, ord. 462/2026/CT: deviazione a lato di una chiusura
     'macchine agricole',
 })
 

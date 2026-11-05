@@ -200,6 +200,16 @@ test("scheda Messaggi aperta da un nuovo utente: benvenuto una volta sola, mai d
   assert.equal(slackCalls("chat.postMessage").length, 1);          // un bot non si saluta
 });
 
+test("terza voce: anche cantieri e restringimenti (want_all)", async () => {
+  await submit("U7", { regions: ["sicilia"], kinds: ["closures", "all"] });
+  const row = await env.DB.prepare("SELECT want_closures, want_speed, want_all FROM users WHERE user_id='U7'").first();
+  assert.deepEqual([row.want_closures, row.want_speed, row.want_all], [1, 0, 1]);
+  assert.match(slackCalls("chat.postMessage").at(-1).body.blocks[0].text.text, /anche cantieri e restringimenti/);
+  await submit("U7", { regions: ["sicilia"], kinds: ["closures"] });
+  const row2 = await env.DB.prepare("SELECT want_all FROM users WHERE user_id='U7'").first();
+  assert.equal(row2.want_all, 0);
+});
+
 test("l'orologio avvia il workflow di GitHub", async () => {
   assert.equal(await dispatchWorkflow(env), 204);
   const c = calls.at(-1);

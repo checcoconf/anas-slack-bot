@@ -31,7 +31,7 @@ from .anas.pdftext import pdf_to_text
 from .anas.relay import choose_route
 from .anas.robots import RobotsPolicy
 from .config import Config
-from .db import D1Http, Database, LocalSqlite, schema_statements
+from .db import D1Http, Database, LocalSqlite, migrate, schema_statements
 from .membership import Membership, build_web_client
 from .digest import Digest
 from .notifier import Notifier, channel_subscribers
@@ -48,8 +48,12 @@ def open_database(cfg: Config) -> Database:
         backend = D1Http(cfg.cf_account_id, cfg.cf_d1_database_id, cfg.cf_api_token)
         # crea le tabelle se mancano: il job funziona anche se parte prima del workflow "Pubblica Worker"
         backend.batch([(st, ()) for st in schema_statements()])
-        return Database(backend)
-    return Database(LocalSqlite(cfg.local_db_path))
+        db = Database(backend)
+    else:
+        db = Database(LocalSqlite(cfg.local_db_path))
+    for col in migrate(db.b):
+        log.info("Database: aggiunta la colonna %s", col)
+    return db
 
 
 _admin_client = None
@@ -207,12 +211,6 @@ def _listing_alerts(db: Database, client, cfg: Config, lres) -> None:
                                + "\nControlla che vengano classificati bene: istruzioni in collaudo/LEGGIMI.md.")
             db.set("alerted_measures", json.dumps(sorted(already | set(fresh)), ensure_ascii=False))
 
-    if lres.national_off:
-        admin(client, cfg, "⚠️ Ricerca nazionale spenta per oggi (sfora i 1.000 risultati o ha cambiato forma):\n"
-                           + "\n".join(f"• {m}" for m in lres.national_off)
-                           + "\nLe stesse ordinanze arrivano comunque dalla rotazione per struttura, con più ritardo. "
-                           "Se si ripete, togli quella voce da NATIONAL_SEARCHES.")
-
     if lres.uncertain:
         already = set(json.loads(db.get("alerted_uncertain", "[]") or "[]"))
         fresh = sorted(set(lres.uncertain) - already)
@@ -261,6 +259,7 @@ def main() -> int:
             route = choose_route(cfg.anas_route, db, anas, cfg.slack_bot_token, listing.prime, cfg.worker_url)
             log.info("Collegamento ad ANAS: %s", route)
             load_robots_cached(db, listing)  # da crawler educato: rispetta robots.txt e crawl-delay
+            listing.restore_cookies(db)  # la pagina iniziale si rilegge solo se il sito non riconosce il cookie
         except BlockedError as exc:
             # Bloccati già alla prima pagina (o a robots.txt): stessa pausa di un blocco durante il giro,
             # così il giro non fa altre richieste (ognuna allungherebbe la quarantena)
@@ -270,7 +269,10 @@ def main() -> int:
         except TransientError as exc:
             log.warning("ANAS non raggiungibile né direttamente né dal ponte del Worker: %s", exc)
     source = PdfSource(anas, pdf_to_text)
-    return run(cfg, db, client, source, listing, started)
+    try:
+        return run(cfg, db, client, source, listing, started)
+    finally:
+        listing.save_cookies(db)
 
 
 def fallback_run_is_needed(db: Database, trigger: str, now=time.time, max_age_minutes: int = 100) -> bool:

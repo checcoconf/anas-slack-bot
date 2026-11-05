@@ -40,6 +40,36 @@ log = logging.getLogger(__name__)
 SCHEMA = (Path(__file__).with_name("schema.sql")).read_text(encoding="utf-8")
 
 
+# Colonne aggiunte dopo la prima versione: (tabella, colonna, definizione). Il job le aggiunge da solo
+# se mancano (migrate); il workflow del Worker fa lo stesso con "ALTER TABLE ... || true".
+MIGRATIONS: tuple[tuple[str, str, str], ...] = (
+    ("users", "want_all", "INTEGER NOT NULL DEFAULT 0"),
+)
+
+
+def migrate(backend: "Backend") -> list[str]:
+    """Aggiunge le colonne mancanti; restituisce i nomi di quelle aggiunte.
+
+    Non deve mai fermare il job: se PRAGMA non è disponibile si prova l'ALTER alla cieca, e un
+    "duplicate column" (colonna già presente) è la risposta normale."""
+    added = []
+    for table, column, definition in MIGRATIONS:
+        try:
+            present = {r.get("name") for r in backend.query(f"PRAGMA table_info({table})")}
+        except Exception as exc:  # noqa: BLE001 - backend senza PRAGMA: si tenta l'ALTER direttamente
+            log.info("PRAGMA table_info non disponibile (%s): provo l'ALTER direttamente", exc)
+            present = None
+        if present is not None and column in present:
+            continue
+        try:
+            backend.query(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+            added.append(f"{table}.{column}")
+        except Exception as exc:  # noqa: BLE001
+            if "duplicate column" not in str(exc).lower():
+                log.warning("Migrazione %s.%s non riuscita (%s): il job continua con lo schema attuale", table, column, exc)
+    return added
+
+
 def schema_statements() -> list[str]:
     """Le istruzioni di schema.sql una per una (tutte "IF NOT EXISTS": si possono ripetere)."""
     sql = "\n".join(line for line in SCHEMA.splitlines() if not line.lstrip().startswith("--"))
@@ -143,6 +173,7 @@ class User:
     provinces: list[str] = field(default_factory=list)
     want_closures: bool = True
     want_speed: bool = True
+    want_all: bool = False  # anche cantieri, restringimenti, sensi unici...: tutte le altre ordinanze
     welcomed_at: float | None = None
 
     @property
@@ -161,6 +192,7 @@ def _row_to_user(r: dict) -> User:
         provinces=json.loads(r["provinces"] or "[]"),
         want_closures=bool(r["want_closures"]),
         want_speed=bool(r["want_speed"]),
+        want_all=bool(r.get("want_all") or 0),
         welcomed_at=r["welcomed_at"],
     )
 
@@ -223,7 +255,7 @@ class Database:
         silent=True: ordinanza già in vigore prima dell'installazione del bot. Viene
         segnata come vista (stato 3) ma non notificata: niente ordinanze vecchie.
         """
-        state = 3 if silent else (0 if o.category in RELEVANT else 2)
+        state = 3 if silent else 0  # anche le "altre" passano dalla coda: c'è chi vuole tutto (want_all)
         stmts: list[Stmt] = [
             ("INSERT OR IGNORE INTO ordinanze(ord_id, fetched_at, category, data, text, notify_state) "
              "VALUES(?,?,?,?,?,?)",
@@ -257,12 +289,14 @@ class Database:
     def upgrade_from_listing(self, o: Ordinanza) -> bool:
         """L'elenco ufficiale dice che un'ordinanza già vista come "altro" è utile: la rimette in coda.
 
-        Vale solo per le ordinanze scartate (stato 2), mai per quelle già notificate o silenziate.
+        Vale solo per le ordinanze viste come "altro" (in coda, scartate o già mandate come tali a chi
+        vuole tutto), mai per quelle già utili o silenziate all'installazione.
         """
-        rows = self.b.query("SELECT notify_state FROM ordinanze WHERE ord_id=?", (o.ord_id,))
-        if not rows or int(rows[0]["notify_state"]) != 2 or o.category not in RELEVANT:
+        rows = self.b.query("SELECT notify_state, category FROM ordinanze WHERE ord_id=?", (o.ord_id,))
+        if not rows or int(rows[0]["notify_state"]) == 3 or rows[0]["category"] in RELEVANT \
+                or o.category not in RELEVANT:
             return False
-        self.b.query("UPDATE ordinanze SET category=?, data=?, notify_state=0 WHERE ord_id=? AND notify_state=2",
+        self.b.query("UPDATE ordinanze SET category=?, data=?, notify_state=0 WHERE ord_id=?",
                      (o.category, json.dumps(o.to_dict(), ensure_ascii=False), o.ord_id))
         return True
 
@@ -324,13 +358,13 @@ class Database:
         self.b.query("UPDATE users SET paused=?, updated_at=? WHERE user_id=?", (int(value), time.time(), user_id))
 
     def save_preferences(self, user_id: str, *, all_italy: bool, regions: list[str], provinces: list[str],
-                         want_closures: bool, want_speed: bool) -> None:
+                         want_closures: bool, want_speed: bool, want_all: bool = False) -> None:
         self.b.batch([
             (_UPSERT_USER, (user_id, time.time())),
             ("UPDATE users SET configured=1, paused=0, all_italy=?, regions=?, provinces=?, "
-             "want_closures=?, want_speed=?, updated_at=? WHERE user_id=?",
+             "want_closures=?, want_speed=?, want_all=?, updated_at=? WHERE user_id=?",
              (int(all_italy), json.dumps(sorted(regions)), json.dumps(sorted(provinces)),
-              int(want_closures), int(want_speed), time.time(), user_id)),
+              int(want_closures), int(want_speed), int(want_all), time.time(), user_id)),
         ])
 
     # --- coda consegne --------------------------------------------------
