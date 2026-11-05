@@ -45,6 +45,8 @@ from .anas.listing import (
     ListingClient,
     ListingError,
     Structure,
+    _plain,
+    clean_excerpt,
     apply_record_fields,
     record_to_ordinanza,
     split_provisions,
@@ -75,6 +77,8 @@ class ListingResult:
     upgraded: int = 0
     unknown: dict[str, str] = field(default_factory=dict)  # provvedimento mai visto -> link al PDF
     uncertain: dict[str, str] = field(default_factory=dict)  # chiusura da verificare: motivo -> link al PDF
+    learned: dict[str, str] = field(default_factory=dict)    # voce nuova giudicata innocua dal modello -> motivo
+    ai_calls: int = 0
     max_id: int = 0  # numero più alto visto: tiene vicino al presente il canale a numeri di riserva
     deferred: int = 0  # ordinanze rimandate al giro dopo perché il tetto dei PDF era esaurito
     skipped: list[str] = field(default_factory=list)  # strutture saltate per un errore di rete
@@ -94,6 +98,9 @@ class ListingPoller:
         self._province_regions: set[str] = set()  # calcolato a ogni giro (run)
         self.deep = False  # True nelle ore notturne (LISTING_DEEP_HOURS): più pagine, e i PDF
         self.after_structure = None  # callback senza argomenti: il job manda i messaggi in coda (giro lungo)
+        self.ai = None  # anas_bot.ai.LocalModel, se c'è; il job lo imposta. ai_flag: i pareri toccano i messaggi
+        self.ai_flag = True
+        self._learned: set[str] = set()  # voci del vocabolario aggiunte a runtime (chiave kv "learned_measures")
         self.watermark = 0  # ID più alto visto al primo giro: sotto è "già in vigore prima del bot"
 
     def _fetch_text(self, ord_id: int) -> str | None:
@@ -194,8 +201,12 @@ class ListingPoller:
                 text = self._fetch_text(ord_id) or ""
                 self._enrich_provinces(o, text)
             measures = [m for p in split_provisions(rec.get("RIEPILOGO", "")) for m in p.measures]
-            for m in unknown_measures(measures):
-                res.unknown.setdefault(m, url)
+            summary = clean_excerpt(_plain(rec.get("RIEPILOGO", "")))
+            for m in unknown_measures(measures, self._learned):
+                if not self._measure_is_harmless(m, summary, res):
+                    res.unknown.setdefault(m, url)
+            if o.category == CLOSURE and not o.uncertain:
+                self._second_opinion(o, summary, text, res)
             if o.uncertain and o.category in RELEVANT:
                 res.uncertain.setdefault(o.uncertain_why, url)
             self.db.set("anas_last_found_at", str(time.time()))
@@ -203,6 +214,38 @@ class ListingPoller:
         res.new += 1
         res.silent += silent
         res.relevant += (o.category in RELEVANT) and not silent
+
+    # --- secondo parere del modello locale (anas_bot/ai.py) ---------------------------------
+    def _second_opinion(self, o: Ordinanza, summary: str, text: str, res: ListingResult) -> None:
+        """Chiusura secondo le regole: se il modello dice "non chiude", parte come "da verificare"."""
+        if self.ai is None:
+            return
+        verdict = self.ai.closure_verdict(summary + ("\n\nTesto del PDF:\n" + text if text else ""))
+        res.ai_calls += 1
+        if verdict is None:
+            return
+        kind, reason = verdict
+        log.info("Modello locale su %s (%s): %s — %s", o.number or o.ord_id, " ".join(o.roads[:2]), kind, reason)
+        if kind == "non_chiusura" and self.ai_flag:
+            o.uncertain = True
+            o.uncertain_why = f"il modello locale dubita che sia una chiusura: {reason or 'senza motivo'}"
+
+    def _measure_is_harmless(self, measure: str, summary: str, res: ListingResult) -> bool:
+        """Voce mai vista: il modello dice se può nascondere una chiusura. Se no, entra nel vocabolario da sola."""
+        if self.ai is None:
+            return False
+        verdict = self.ai.measure_closes(measure, summary)
+        res.ai_calls += 1
+        if verdict is None:
+            return False
+        closes, reason = verdict
+        log.info("Modello locale sulla voce «%s»: %s — %s", measure, "può chiudere" if closes else "innocua", reason)
+        if closes or not self.ai_flag:
+            return False
+        self._learned.add(measure)
+        self.db.set("learned_measures", json.dumps(sorted(self._learned), ensure_ascii=False))
+        res.learned[measure] = reason
+        return True
 
     def _handle_page(self, records: list[dict], st: Structure, baseline: bool, installed: str,
                      res: ListingResult) -> int:
@@ -243,6 +286,10 @@ class ListingPoller:
         if not installed:
             installed = today.isoformat()
             self.db.set("installed_on", installed)
+        try:
+            self._learned = set(json.loads(self.db.get("learned_measures", "[]") or "[]"))
+        except ValueError:
+            self._learned = set()
 
         # In pausa dopo un blocco del firewall: nessuna richiesta ad ANAS finché non scade
         blocked_until = float(self.db.get(BLOCKED_UNTIL, "0") or 0)

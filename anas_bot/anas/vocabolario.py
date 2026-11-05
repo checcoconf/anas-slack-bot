@@ -88,6 +88,7 @@ KNOWN_MEASURES: frozenset[str] = frozenset({
     'veicoli che trasportano esplosivo o prodotti facilmente infiammabili',
     'direzione obbligatoria sinistra',
     'direzione obbligatoria sinistra e destra',  # 04/11/2026, ord. 462/2026/CT: deviazione a lato di una chiusura
+    'veicoli a braccia',  # 05/11/2026: categoria in un divieto di transito (carretti a mano), non una chiusura
     'macchine agricole',
 })
 
@@ -97,5 +98,6 @@ def measure_key(m: str) -> str:
     return re.sub(r"\d+([.,]\d+)?", "N", m).strip(" .;,")
 
 
-def unknown_measures(measures: list[str]) -> list[str]:
-    return sorted({measure_key(m) for m in measures} - KNOWN_MEASURES)
+def unknown_measures(measures: list[str], extra: set[str] | frozenset[str] = frozenset()) -> list[str]:
+    """Voci non nel vocabolario (né tra quelle aggiunte a runtime, `extra`: vedi listing_poller)."""
+    return sorted({measure_key(m) for m in measures} - KNOWN_MEASURES - set(extra))

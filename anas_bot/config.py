@@ -89,6 +89,10 @@ class Config:
     listing_deep_pages: int = 4  # pagine lette sempre, per struttura, nelle ore "profonde"
     listing_deep_hours: str = "0-6"  # ore locali (da-a, estremo finale escluso); vuoto = mai
     anas_bot_key: str = ""  # codice concordato con ANAS, mandato nell'intestazione X-Waze-Bot-Key
+    # Secondo parere del modello locale (anas_bot/ai.py): flag = segna "da verificare" e amplia il vocabolario;
+    # log = solo nel log; off = non si carica. Il file del modello lo scarica il workflow (AI_MODEL_URL).
+    ai_mode: str = "flag"
+    ai_model_path: str = ""
     walk_always: bool = False  # canale a numeri anche quando l'elenco funziona (di norma solo di riserva)
 
     welcome_existing_members: bool = True
@@ -134,6 +138,8 @@ class Config:
         c.lookahead_after_hours = _int("LOOKAHEAD_AFTER_HOURS", c.lookahead_after_hours)
         c.stall_alert_hours = _int("STALL_ALERT_HOURS", c.stall_alert_hours)
         c.anas_bot_key = _str("ANAS_BOT_KEY", c.anas_bot_key)
+        c.ai_mode = _str("AI_MODE", c.ai_mode).lower()
+        c.ai_model_path = _str("AI_MODEL_PATH", c.ai_model_path)
         c.listing_structures_per_run = max(1, _int("LISTING_STRUCTURES_PER_RUN", c.listing_structures_per_run))
         c.listing_fast_pages_min = _int("LISTING_FAST_PAGES_MIN", c.listing_fast_pages_min)
         c.listing_fast_pages_max = _int("LISTING_FAST_PAGES_MAX", c.listing_fast_pages_max)

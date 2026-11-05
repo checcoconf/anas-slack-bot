@@ -376,7 +376,9 @@ _SPEED = re.compile(r"limite (?:massimo )?di velocita\s*(\d{2,3})\s*km")
 # 77 voci di provvedimento, vedi anas_bot/anas/vocabolario.py e collaudo/LEGGIMI.md) ---------------
 
 # Provvedimenti che chiudono la strada (se valgono per tutti gli utenti).
-CLOSING_MEASURES = ("chiusura al traffico", "divieto di transito", "interdizione", "sospensione della circolazione")
+CLOSING_MEASURES = ("chiusura al traffico", "divieto di transito", "interdizione", "sospensione della circolazione",
+                    # il traffico di questa carreggiata passa sull'altra: questa non si percorre (regola Waze, 05/11/2026)
+                    "deviazione del traffico su carreggiata opposta", "spostamento su carreggiata opposta")
 OPENING_MEASURES = ("apertura al traffico", "riapertura")
 # Il provvedimento lascia passare il traffico: non è una chiusura per Waze.
 PASSING_MEASURES = ("senso unico alternato",)
@@ -420,19 +422,33 @@ _RESTRICTED = re.compile(
 )
 
 
+# Categorie di utenti che ANAS elenca dopo "tutti gli utenti" quando il divieto è solo per loro
+# (riclassificazione a strada tipo B, 05/11/2026, SS 719: "tutti gli utenti, veicoli a trazione animale,
+# velocipedi, veicoli a braccia, macchine agricole, ciclomotori, motocicli"): le auto passano.
+_CATEGORY_LIST = re.compile(r"velociped|biciclett|a braccia|trazione animale|macchine agricole|ciclomotor|motocicl"
+                            r"|motocarrozz|pedon|animali|autocarr|autoarticolat|autotren|autobus|mezzi pesanti"
+                            r"|massa superiore|veicoli aventi massa")
+
+
 def everyone(users: str) -> bool:
     """True se il provvedimento riguarda le auto normali.
 
     "tutti gli utenti", "tutti gli autoveicoli", "tutti", "tutti tranne mezzi di soccorso",
     "tutti tranne traffico locale" -> sì; "tutti veicoli aventi massa superiore a 44t",
-    "autocarri", "pedoni ; velocipedi" -> no. Con più gruppi separati da ";" basta che uno valga per tutti.
+    "autocarri", "pedoni ; velocipedi" -> no. "tutti gli utenti, velocipedi, veicoli a braccia, ..." -> no:
+    è l'elenco delle categorie a cui si applica il divieto. Con più gruppi separati da ";" basta che uno valga
+    per tutti.
     """
     users = users.split("l'ordinanza sara")[0]
     for group in (g.strip(" ;,.") for g in users.split(";")):
         if not group:
             continue
-        if group.startswith("tutti tranne") or group in ("tutti", "tutti gli utenti", "tutti gli autoveicoli",
-                                                         "autovetture") or group.startswith("tutti gli utenti"):
+        if group.startswith("tutti gli utenti"):
+            rest = group[len("tutti gli utenti"):].strip(" ,")
+            if rest and not rest.startswith(("tranne", "eccetto", "ad eccezione", "esclus")) and _CATEGORY_LIST.search(rest):
+                continue  # "tutti gli utenti" seguito dalle categorie: vale solo per quelle
+            return True
+        if group.startswith("tutti tranne") or group in ("tutti", "tutti gli autoveicoli", "autovetture"):
             return True
         if group.startswith("tutti") and not _RESTRICTED.search(group):
             return True
@@ -513,9 +529,13 @@ def classify_provision(p: Provision, rec: dict | None = None) -> Provision:
         p.category = REOPENING
         return p
     speed = [m for m in measures if _SPEED.search(m)]
-    if speed and for_all and not _END.search(p.text):
-        if any(c in detail for c in PERMANENT_SPEED_CAUSES) or "permanent" in p.text:
-            p.category = SPEED
+    # il limite di velocità vale per tutti anche quando il divieto accanto è per alcune categorie
+    # ("tutti gli utenti, velocipedi, ..."): basta che "tutti gli utenti" compaia
+    speed_for_all = for_all or "tutti gli utenti" in users
+    if speed and speed_for_all and not _END.search(p.text):
+        if (any(c in detail for c in PERMANENT_SPEED_CAUSES) or "permanent" in p.text
+                or "classificazione" in p.text or "tipo b" in p.text or "tipo a" in p.text):
+            p.category = SPEED  # riclassificazione della strada: limite nuovo, definitivo
     return p
 
 

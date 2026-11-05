@@ -72,7 +72,7 @@ def test_real_bari_page():
 
 
 def test_vocabulary_covers_real_measures():
-    assert len(KNOWN_MEASURES) == 78  # 77 dal collaudo del 02/11 + "direzione obbligatoria sinistra e destra" (04/11)
+    assert len(KNOWN_MEASURES) == 79  # 77 dal collaudo del 02/11 + le voci viste dopo (una per riga, con la data)
     assert unknown_measures(["chiusura al traffico", "limite di velocita 40Km/h".lower()]) == []
     assert unknown_measures(["chiusura notturna a targhe alterne"]) == ["chiusura notturna a targhe alterne"]
 
@@ -668,3 +668,36 @@ def test_other_ordinance_without_province_waits_for_the_night_pdf_when_someone_f
     listing.pages["BA"].insert(0, _rec(213801, works["RIEPILOGO"]))
     r = p.run(date(2026, 11, 4), hour=14)
     assert r.new == 1 and r.deferred == 0 and src.requests == [213800]
+
+
+def test_type_b_reclassification_is_a_permanent_limit_not_a_closure():
+    """Ordinanza reale 05/11/2026 (SS 719 Prato-Pistoia): "divieto di transito, limite 70 km/h ... interesserà
+    tutti gli utenti, veicoli a trazione animale, velocipedi, veicoli a braccia, ...". Il divieto è per le
+    categorie elencate (strada tipo B), le auto passano: non è una chiusura; il 70 è un limite nuovo, definitivo."""
+    from anas_bot.anas.listing import everyone
+    from anas_bot.anas.parser import SPEED
+    riep = ("L'Ordinanza sar&agrave; applicata alla tratta <strong>SS 719 PRATO - PISTOIA (DECLASSATA DI PRATO)</strong> "
+            "dal km 4+215 al km 7+482, classificazione Strada Statale Tipo B, attuando i seguenti provvedimenti:<br> "
+            "<ul><li>divieto di transito</li><li>limite di velocita 70Km/h</li></ul> a partire dal <strong>09/11/2026</strong>"
+            "<br> Interesser&agrave;: tutti gli utenti, veicoli a trazione animale , velocipedi , veicoli a braccia , "
+            "macchine agricole , ciclomotori , motocarrozzette , ciclomotori e motocicli<br><br>")
+    o = record_to_ordinanza(_rec(777, riep, causa_dett="Classificazione strada", numero="500/2026/FI"), "Toscana", "u")
+    assert o.category == SPEED and o.speeds == [70] and o.open_ended and o.roads == ["SS719"]
+    assert everyone("tutti gli utenti") and everyone("tutti gli utenti, tranne mezzi di soccorso")
+    assert everyone("tutti gli utenti ; autocarri")                      # due gruppi: uno vale per tutti
+    assert not everyone("tutti gli utenti, velocipedi, veicoli a braccia")
+    assert not everyone("tutti gli utenti, veicoli aventi massa superiore a 3,5 t")
+
+
+def test_one_carriageway_closed_with_contraflow_on_the_other_is_a_directional_closure():
+    """Carreggiate separate: Nord chiusa (o deviata sull'opposta), Sud in doppio senso. Per Waze si chiude la Nord."""
+    for measure in ("chiusura al traffico", "deviazione del traffico su carreggiata opposta"):
+        riep = ("L'Ordinanza sar&agrave; applicata alle seguenti tratte:<br><strong>SS 16 ADRIATICA</strong> dal km 800+000 "
+                "al km 805+000 sulla <strong>carreggiata Nord</strong>, Direzione Bari attuando i seguenti provvedimenti: ;"
+                f"<ul><li>{measure}</li></ul> a partire dal <strong>06/11/2026</strong> fino al <strong>20/11/2026</strong> "
+                "Interesser&agrave;: tutti gli utenti<br><strong>SS 16 ADRIATICA</strong> dal km 800+000 al km 805+000 sulla "
+                "<strong>carreggiata Sud</strong>, Direzione Lecce attuando i seguenti provvedimenti: ;<ul><li>doppio senso di "
+                "circolazione</li><li>limite di velocita 50Km/h</li></ul> a partire dal <strong>06/11/2026</strong> fino al "
+                "<strong>20/11/2026</strong> Interesser&agrave;: tutti gli utenti<br>")
+        o = record_to_ordinanza(_rec(990, riep), "Puglia", "u")
+        assert o.category == CLOSURE and o.direction == "verso Bari" and not o.uncertain, measure

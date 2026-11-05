@@ -8,9 +8,11 @@ on:
   schedule:
     - cron: "41 */3 * * *"
 
-# mai due giri in parallelo sullo stesso database
+# Mai due giri veri in parallelo (il tetto orario è contato nel database, ma la rotazione andrebbe a
+# zig-zag). Il giro di riserva (schedule, ogni 3 ore) ha una coda sua: parte subito, legge che il Worker
+# ha avviato un giro da poco e si chiude in pochi secondi, invece di restare in coda e farsi cancellare.
 concurrency:
-  group: anas-job
+  group: ${{ github.event_name == 'schedule' && 'anas-job-riserva' || 'anas-job' }}
   cancel-in-progress: false
 
 permissions:
@@ -28,6 +30,28 @@ jobs:
           python-version: "3.13"
           cache: pip
       - run: pip install -r requirements.txt
+
+      # Secondo parere del modello locale (anas_bot/ai.py): facoltativo, se qualcosa fallisce il giro va avanti senza.
+      # Il modello (4,7 GB) resta nella cache di Actions; llama-cpp-python si compila la prima volta (poi è in cache pip).
+      - name: Modello locale dalla cache
+        id: model-cache
+        if: vars.AI_MODE != 'off'
+        uses: actions/cache@v4
+        with:
+          path: ~/modelli/modello.gguf
+          key: modello-${{ vars.AI_MODEL_URL || 'qwen2.5-7b-instruct-q4_k_m' }}
+      - name: Scarica il modello locale (solo la prima volta)
+        if: vars.AI_MODE != 'off' && steps.model-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        run: |
+          mkdir -p ~/modelli
+          curl -L --fail --retry 3 -o ~/modelli/modello.gguf \
+            "${{ vars.AI_MODEL_URL || 'https://huggingface.co/bartowski/Qwen2.5-7B-Instruct-GGUF/resolve/main/Qwen2.5-7B-Instruct-Q4_K_M.gguf' }}"
+      - name: Installa llama.cpp per Python
+        if: vars.AI_MODE != 'off'
+        continue-on-error: true
+        run: pip install llama-cpp-python
+
       - name: Giro ANAS -> Slack
         run: python -m anas_bot.job
         env:
@@ -64,4 +88,6 @@ jobs:
           LISTING_DEEP_HOURS: ${{ vars.LISTING_DEEP_HOURS }}
           # codice concordato con ANAS per l'eccezione nel loro firewall (se ve lo danno)
           ANAS_BOT_KEY: ${{ secrets.ANAS_BOT_KEY }}
+          AI_MODE: ${{ vars.AI_MODE }}          # flag (default) | log | off
+          AI_MODEL_PATH: ${{ vars.AI_MODE != 'off' && '~/modelli/modello.gguf' || '' }}
           WORKER_URL: ${{ vars.WORKER_URL }}

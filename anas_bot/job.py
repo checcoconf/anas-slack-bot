@@ -24,6 +24,7 @@ from zoneinfo import ZoneInfo
 from slack_sdk.errors import SlackApiError
 
 from . import __version__
+from .ai import LocalModel
 from .anas.budget import RequestLedger
 from .anas.client import AnasClient, BlockedError, TransientError
 from .anas.listing import ListingClient
@@ -76,7 +77,7 @@ def admin(client, cfg: Config, text: str) -> None:
         log.warning("Messaggio admin non inviato, Slack non raggiungibile: %s", exc)
 
 
-def run(cfg: Config, db: Database, client, source, listing=None, started: float | None = None) -> int:
+def run(cfg: Config, db: Database, client, source, listing=None, started: float | None = None, ai=None) -> int:
     """started: time.monotonic() dell'avvio del job (main): il tempo del giro conta da lì, anche se prima
     si è aspettata la fine di una pausa."""
     started = time.monotonic() if started is None else started
@@ -118,6 +119,7 @@ def run(cfg: Config, db: Database, client, source, listing=None, started: float 
             users += nres.users_notified
             channel_errors.update(nres.channel_errors)
         poller = ListingPoller(db, listing, source, cfg)
+        poller.ai, poller.ai_flag = ai, cfg.ai_mode == "flag"
         poller.after_structure = flush
         lres = poller.run(today, deadline=started + budget, hour=local_now.hour)
         flush()
@@ -128,6 +130,8 @@ def run(cfg: Config, db: Database, client, source, listing=None, started: float 
                  lres.silent, lres.upgraded, lres.deferred, ",".join(lres.structures) or "-",
                  (f", saltate: {','.join(lres.skipped)}" if lres.skipped else "")
                  + (f", errore: {lres.error}" if lres.error else ""))
+        if ai is not None and lres.ai_calls:
+            log.info("Modello locale: %d pareri in %.0f s", ai.calls, ai.seconds)
         _listing_alerts(db, client, cfg, lres)
 
     # 2) Canale a numeri: di riserva, solo se l'elenco ha cambiato formato (o se richiesto con WALK_ALWAYS).
@@ -211,6 +215,11 @@ def _listing_alerts(db: Database, client, cfg: Config, lres) -> None:
                                + "\nControlla che vengano classificati bene: istruzioni in collaudo/LEGGIMI.md.")
             db.set("alerted_measures", json.dumps(sorted(already | set(fresh)), ensure_ascii=False))
 
+    if lres.learned:
+        admin(client, cfg, "🤖 Voci nuove nei provvedimenti ANAS, giudicate innocue dal modello locale e aggiunte al vocabolario:\n"
+                           + "\n".join(f"• `{m}`: {why}" for m, why in lres.learned.items())
+                           + "\nNiente da fare; se il giudizio ti sembra sbagliato, dimmelo.")
+
     if lres.uncertain:
         already = set(json.loads(db.get("alerted_uncertain", "[]") or "[]"))
         fresh = sorted(set(lres.uncertain) - already)
@@ -269,8 +278,11 @@ def main() -> int:
         except TransientError as exc:
             log.warning("ANAS non raggiungibile né direttamente né dal ponte del Worker: %s", exc)
     source = PdfSource(anas, pdf_to_text)
+    ai = LocalModel.from_env(cfg.ai_mode, cfg.ai_model_path)
+    if ai is not None:
+        log.info("Modello locale pronto (%s), AI_MODE=%s", os.path.basename(cfg.ai_model_path), cfg.ai_mode)
     try:
-        return run(cfg, db, client, source, listing, started)
+        return run(cfg, db, client, source, listing, started, ai)
     finally:
         listing.save_cookies(db)
 
