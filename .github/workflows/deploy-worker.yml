@@ -70,7 +70,10 @@ jobs:
 
       - name: Aggiunge le colonne nuove (se mancano)
         # ALTER fallisce se la colonna c'è già: è normale, il job fa lo stesso controllo (anas_bot/db.py, MIGRATIONS)
-        run: npx wrangler d1 execute anas-bot --remote --yes --command "ALTER TABLE users ADD COLUMN want_all INTEGER NOT NULL DEFAULT 0" || true
+        run: |
+          npx wrangler d1 execute anas-bot --remote --yes --command "ALTER TABLE users ADD COLUMN want_all INTEGER NOT NULL DEFAULT 0" || true
+          npx wrangler d1 execute anas-bot --remote --yes --command "ALTER TABLE users ADD COLUMN all_regions TEXT NOT NULL DEFAULT '[]'" || true
+          npx wrangler d1 execute anas-bot --remote --yes --command "ALTER TABLE users ADD COLUMN all_provinces TEXT NOT NULL DEFAULT '[]'" || true
 
       - name: Pubblica il Worker
         run: >

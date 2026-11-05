@@ -38,6 +38,8 @@ CREATE TABLE IF NOT EXISTS users (
     want_closures INTEGER NOT NULL DEFAULT 1,
     want_speed INTEGER NOT NULL DEFAULT 1,
     want_all INTEGER NOT NULL DEFAULT 0,  -- anche cantieri e restringimenti (tutte le altre ordinanze)
+    all_regions TEXT NOT NULL DEFAULT '[]',   -- zone dei cantieri, se diverse da quelle sopra (vuote = le stesse)
+    all_provinces TEXT NOT NULL DEFAULT '[]',
     welcomed_at REAL,
     updated_at REAL
 );

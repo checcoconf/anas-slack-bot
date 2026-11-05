@@ -44,6 +44,8 @@ SCHEMA = (Path(__file__).with_name("schema.sql")).read_text(encoding="utf-8")
 # se mancano (migrate); il workflow del Worker fa lo stesso con "ALTER TABLE ... || true".
 MIGRATIONS: tuple[tuple[str, str, str], ...] = (
     ("users", "want_all", "INTEGER NOT NULL DEFAULT 0"),
+    ("users", "all_regions", "TEXT NOT NULL DEFAULT '[]'"),
+    ("users", "all_provinces", "TEXT NOT NULL DEFAULT '[]'"),
 )
 
 
@@ -174,6 +176,8 @@ class User:
     want_closures: bool = True
     want_speed: bool = True
     want_all: bool = False  # anche cantieri, restringimenti, sensi unici...: tutte le altre ordinanze
+    all_regions: list[str] = field(default_factory=list)    # zone dei cantieri; vuote = le stesse zone
+    all_provinces: list[str] = field(default_factory=list)
     welcomed_at: float | None = None
 
     @property
@@ -193,6 +197,8 @@ def _row_to_user(r: dict) -> User:
         want_closures=bool(r["want_closures"]),
         want_speed=bool(r["want_speed"]),
         want_all=bool(r.get("want_all") or 0),
+        all_regions=json.loads(r.get("all_regions") or "[]"),
+        all_provinces=json.loads(r.get("all_provinces") or "[]"),
         welcomed_at=r["welcomed_at"],
     )
 
@@ -358,13 +364,17 @@ class Database:
         self.b.query("UPDATE users SET paused=?, updated_at=? WHERE user_id=?", (int(value), time.time(), user_id))
 
     def save_preferences(self, user_id: str, *, all_italy: bool, regions: list[str], provinces: list[str],
-                         want_closures: bool, want_speed: bool, want_all: bool = False) -> None:
+                         want_closures: bool, want_speed: bool, want_all: bool = False,
+                         all_regions: list[str] | None = None, all_provinces: list[str] | None = None) -> None:
         self.b.batch([
             (_UPSERT_USER, (user_id, time.time())),
             ("UPDATE users SET configured=1, paused=0, all_italy=?, regions=?, provinces=?, "
-             "want_closures=?, want_speed=?, want_all=?, updated_at=? WHERE user_id=?",
+             "want_closures=?, want_speed=?, want_all=?, all_regions=?, all_provinces=?, updated_at=? "
+             "WHERE user_id=?",
              (int(all_italy), json.dumps(sorted(regions)), json.dumps(sorted(provinces)),
-              int(want_closures), int(want_speed), int(want_all), time.time(), user_id)),
+              int(want_closures), int(want_speed), int(want_all),
+              json.dumps(sorted(all_regions or [])), json.dumps(sorted(all_provinces or [])),
+              time.time(), user_id)),
         ])
 
     # --- coda consegne --------------------------------------------------

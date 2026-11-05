@@ -59,16 +59,34 @@ const event = (ev) => post("/slack/events", { type: "event_callback", event: ev 
 const interact = (payload) => post("/slack/interactivity", { payload: JSON.stringify(payload) }, { form: true });
 const sel = (...v) => ({ selected_options: v.map((value) => ({ value })) });
 
-function submit(userId, { scope = [], regions = [], provinces = [], kinds = ["closures"] }) {
+function submit(userId, { scope = [], regions = [], provinces = [], kinds = ["closures"], allRegions = [], allProvinces = [] }) {
   const [bS, aS] = G.ids.scope, [bR, aR] = G.ids.regions, [bP, aP] = G.ids.provinces, [bK, aK] = G.ids.kinds;
+  const [bAR, aAR] = G.ids.allRegions, [bAP, aAP] = G.ids.allProvinces;
   return interact({
     type: "view_submission", user: { id: userId },
     view: { callback_id: G.ids.modalCallback, state: { values: {
       [bS]: { [aS]: sel(...scope) }, [bR]: { [aR]: sel(...regions) },
       [bP]: { [aP]: sel(...provinces) }, [bK]: { [aK]: sel(...kinds) },
+      [bAR]: { [aAR]: sel(...allRegions) }, [bAP]: { [aAP]: sel(...allProvinces) },
     } } },
   });
 }
+
+test("cantieri con zone proprie: salvate solo se la voce è accesa, mostrate nella conferma", async () => {
+  await submit("U7", { scope: ["all"], kinds: ["closures", "all"], allProvinces: ["TA"], allRegions: ["marte"] });
+  let row = await env.DB.prepare("SELECT * FROM users WHERE user_id='U7'").first();
+  assert.equal(row.want_all, 1);
+  assert.equal(row.all_provinces, '["TA"]');
+  assert.equal(row.all_regions, "[]");                                   // regione inesistente scartata
+  assert.match(slackCalls("chat.postMessage").at(-1).body.blocks[0].text.text, /cantieri e restringimenti \(solo: .*Taranto/);
+  const modal = (await import("../src/views.js")).preferencesModal(await getUser(env.DB, "U7"));
+  const apBlock = modal.blocks.find((b) => b.block_id === G.ids.allProvinces[0]);
+  assert.deepEqual(apBlock.element.initial_options.map((o) => o.value), ["TA"]);   // riaperto: la provincia è preselezionata
+  await submit("U7", { scope: ["all"], kinds: ["closures"], allProvinces: ["TA"] });
+  row = await env.DB.prepare("SELECT * FROM users WHERE user_id='U7'").first();
+  assert.equal(row.want_all, 0);
+  assert.equal(row.all_provinces, "[]");                                 // voce spenta: zone dei cantieri ignorate
+});
 
 test("firma: valida, sbagliata, scaduta", async () => {
   const h = new Headers(await sign("ciao", 1000));

@@ -35,6 +35,8 @@ def build() -> dict:
             "regions": [views.B_REGIONS, views.A_REGIONS],
             "provinces": [views.B_PROVINCES, views.A_PROVINCES],
             "kinds": [views.B_KINDS, views.A_KINDS],
+            "allRegions": [views.B_ALL_REGIONS, views.A_ALL_REGIONS],
+            "allProvinces": [views.B_ALL_PROVINCES, views.A_ALL_PROVINCES],
             "kindClosures": views.KIND_CLOSURES,
             "kindSpeed": views.KIND_SPEED,
             "kindAll": views.KIND_ALL,

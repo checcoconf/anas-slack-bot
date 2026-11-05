@@ -8,6 +8,8 @@ const [B_SCOPE, A_SCOPE] = ids.scope;
 const [B_REGIONS, A_REGIONS] = ids.regions;
 const [B_PROVINCES, A_PROVINCES] = ids.provinces;
 const [B_KINDS, A_KINDS] = ids.kinds;
+const [B_ALL_REGIONS, A_ALL_REGIONS] = ids.allRegions;
+const [B_ALL_PROVINCES, A_ALL_PROVINCES] = ids.allProvinces;
 
 const txt = (s) => ({ type: "plain_text", text: s.slice(0, 75), emoji: true });
 
@@ -37,6 +39,8 @@ export function preferencesModal(user) {
   if (user.wantSpeed) kinds.push(ids.kindSpeed);
   if (user.wantAll) kinds.push(ids.kindAll);
   setInitial(element(modal, B_KINDS), kinds);
+  setInitial(element(modal, B_ALL_REGIONS), user.allRegions ?? []);
+  setInitial(element(modal, B_ALL_PROVINCES), user.allProvinces ?? []);
   return modal;
 }
 
@@ -47,6 +51,10 @@ export function parseModal(values) {
   const regions = selected(B_REGIONS, A_REGIONS).filter((r) => r in G.regions);
   const provinces = selected(B_PROVINCES, A_PROVINCES).filter((p) => p in G.provinces);
   const kinds = selected(B_KINDS, A_KINDS);
+  const wantAll = kinds.includes(ids.kindAll);
+  // zone dei cantieri: contano solo se la voce è accesa; vuote = le stesse zone delle chiusure
+  const allRegions = wantAll ? selected(B_ALL_REGIONS, A_ALL_REGIONS).filter((r) => r in G.regions) : [];
+  const allProvinces = wantAll ? selected(B_ALL_PROVINCES, A_ALL_PROVINCES).filter((p) => p in G.provinces) : [];
   const errors = {};
   if (!allItaly && !regions.length && !provinces.length) {
     errors[B_REGIONS] = "⚠️ Scegli almeno una regione o una provincia, oppure spunta Tutta Italia.";
@@ -59,7 +67,9 @@ export function parseModal(values) {
       provinces,
       wantClosures: kinds.includes(ids.kindClosures),
       wantSpeed: kinds.includes(ids.kindSpeed),
-      wantAll: kinds.includes(ids.kindAll),
+      wantAll,
+      allRegions,
+      allProvinces,
     },
     errors,
   };
@@ -79,7 +89,10 @@ export function describeKinds(u) {
   const k = [];
   if (u.wantClosures) k.push("⛔ chiusure e ✅ aperture");
   if (u.wantSpeed) k.push("🚦 limiti di velocità permanenti");
-  if (u.wantAll) k.push("🚧 anche cantieri e restringimenti");
+  if (u.wantAll) {
+    const zones = describeZones({ allItaly: false, regions: u.allRegions ?? [], provinces: u.allProvinces ?? [] });
+    k.push("🚧 anche cantieri e restringimenti" + (u.allRegions?.length || u.allProvinces?.length ? ` (solo: ${zones.replace("\n", ", ")})` : ""));
+  }
   return k.join(" · ") || "nessuno";
 }
 

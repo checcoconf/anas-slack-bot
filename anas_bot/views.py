@@ -31,6 +31,8 @@ B_SCOPE, A_SCOPE = "scope_block", "scope"
 B_REGIONS, A_REGIONS = "regions_block", "regions"
 B_PROVINCES, A_PROVINCES = "provinces_block", "provinces"
 B_KINDS, A_KINDS = "kinds_block", "kinds"
+B_ALL_REGIONS, A_ALL_REGIONS = "all_regions_block", "all_regions"      # zone dei cantieri (facoltative)
+B_ALL_PROVINCES, A_ALL_PROVINCES = "all_provinces_block", "all_provinces"
 
 KIND_CLOSURES = "closures"
 KIND_SPEED = "speed"
@@ -104,6 +106,16 @@ def preferences_modal(user: User | None) -> dict:
     kinds_el: dict = {"type": "checkboxes", "action_id": A_KINDS, "options": list(_KIND_OPTIONS.values())}
     if kinds_initial:
         kinds_el["initial_options"] = kinds_initial
+    all_regions_el: dict = {"type": "multi_static_select", "action_id": A_ALL_REGIONS,
+                            "placeholder": _txt("Regioni per i cantieri (vuoto = le stesse di sopra)"),
+                            "options": region_options()}
+    if u.all_regions:
+        all_regions_el["initial_options"] = [_region_option(r) for r in u.all_regions if r in REGIONS or r == MOTORWAYS]
+    all_provinces_el: dict = {"type": "multi_static_select", "action_id": A_ALL_PROVINCES,
+                              "placeholder": _txt("Province per i cantieri (vuoto = le stesse di sopra)"),
+                              "option_groups": province_option_groups()}
+    if u.all_provinces:
+        all_provinces_el["initial_options"] = [_province_option(p) for p in u.all_provinces if p in PROVINCE_BY_CODE]
 
     return {
         "type": "modal",
@@ -122,7 +134,14 @@ def preferences_modal(user: User | None) -> dict:
             {"type": "input", "block_id": B_PROVINCES, "optional": True, "label": _txt("📍 Singole province"),
              "element": provinces_el, "hint": _txt("🔍 Scrivi nel menu per cercare, es. \"Cun\" per Cuneo")},
             {"type": "input", "block_id": B_KINDS, "label": _txt("🔔 Cosa vuoi ricevere"), "element": kinds_el,
-             "hint": _txt(BETA_NOTICE)},
+             "hint": _txt("🧪 Il filtro \"utili per Waze\" è in beta: può sbagliare.")},  # Slack mostra una riga sola
+            {"type": "context", "elements": [{"type": "mrkdwn", "text": BETA_NOTICE}]},
+            {"type": "input", "block_id": B_ALL_REGIONS, "optional": True,
+             "label": _txt("🚧 Zone per cantieri e restringimenti (se diverse da quelle sopra)"),
+             "element": all_regions_el},
+            {"type": "input", "block_id": B_ALL_PROVINCES, "optional": True, "label": _txt("🚧 ...e province"),
+             "element": all_provinces_el,
+             "hint": _txt("Es. chiusure di tutta Italia, ma cantieri solo della tua provincia. Vuoto = stesse zone.")},
         ],
     }
 

@@ -15,28 +15,40 @@ def wants_category(user: User, o: Ordinanza) -> bool:
     return user.want_all  # cantieri, restringimenti, sensi unici, limiti temporanei...
 
 
-def matches(user: User, o: Ordinanza, unknown_province_fallback: bool = True) -> bool:
-    """True se l'ordinanza ricade nelle zone scelte dall'utente.
+def in_zones(o: Ordinanza, all_italy: bool, regions: list[str], provinces: list[str],
+             unknown_province_fallback: bool = True) -> bool:
+    """L'ordinanza ricade in queste zone?
 
-    - "Tutta Italia" riceve tutto.
-    - "Autostrade (tutta Italia)" riceve ogni ordinanza su A* e RA*, in qualunque regione.
+    - "Tutta Italia" prende tutto.
+    - "Autostrade (tutta Italia)" prende ogni ordinanza su A* e RA*, in qualunque regione.
     - Una regione scelta copre tutte le sue province.
-    - Una provincia scelta riceve le ordinanze che citano quella provincia.
-    - Se dall'ordinanza non si ricava la provincia (solo la regione), chi ha
-      scelto una provincia di quella regione la riceve comunque, segnalata come
-      "provincia non determinata": meglio un avviso in più che una chiusura persa.
+    - Una provincia scelta prende le ordinanze che citano quella provincia.
+    - Se dall'ordinanza non si ricava la provincia (solo la regione), chi ha scelto una provincia di
+      quella regione la riceve comunque, segnalata come "provincia non determinata": meglio un avviso
+      in più che una chiusura persa.
     """
-    if not user.receives or not wants_category(user, o):
-        return False
-    if user.all_italy:
+    if all_italy:
         return True
-    if MOTORWAYS in user.regions and o.motorway:
+    if MOTORWAYS in regions and o.motorway:
         return True
-    if set(o.regions) & set(user.regions):
+    if set(o.regions) & set(regions):
         return True
-    if set(o.provinces) & set(user.provinces):
+    if set(o.provinces) & set(provinces):
         return True
     if not o.provinces and unknown_province_fallback:
-        user_regions_from_prov = {PROVINCE_BY_CODE[p].region for p in user.provinces if p in PROVINCE_BY_CODE}
-        return bool(user_regions_from_prov & set(o.regions))
+        regions_from_prov = {PROVINCE_BY_CODE[p].region for p in provinces if p in PROVINCE_BY_CODE}
+        return bool(regions_from_prov & set(o.regions))
     return False
+
+
+def matches(user: User, o: Ordinanza, unknown_province_fallback: bool = True) -> bool:
+    """True se l'ordinanza è del tipo che l'utente vuole e ricade nelle sue zone.
+
+    Le ordinanze "altre" (cantieri, restringimenti...) hanno zone proprie, se l'utente le ha scelte:
+    si può seguire tutta Italia per le chiusure e una sola provincia per i cantieri. Zone dei cantieri
+    vuote = le stesse zone delle chiusure."""
+    if not user.receives or not wants_category(user, o):
+        return False
+    if o.category not in (CLOSURE, REOPENING, SPEED) and (user.all_regions or user.all_provinces):
+        return in_zones(o, False, user.all_regions, user.all_provinces, unknown_province_fallback)
+    return in_zones(o, user.all_italy, user.regions, user.provinces, unknown_province_fallback)

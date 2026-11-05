@@ -294,3 +294,20 @@ def test_want_all_column_is_added_to_an_old_database(tmp_path):
     db = Database(b)
     db.ensure_user("U1")
     assert db.get_user("U1").want_all is False
+
+
+def test_cantieri_can_have_their_own_zones(db, cfg):
+    """Chiusure di tutta Italia, ma cantieri solo della provincia di Taranto (zone separate per la terza voce)."""
+    from anas_bot.anas.parser import OTHER, Ordinanza
+    from anas_bot.matching import matches
+    _subscribe(db, "U", all_italy=True, want_all=True, all_provinces=["TA"])
+    u = db.get_user("U")
+    closure_ct = Ordinanza(ord_id=1, category="chiusura", regions=["sicilia"], provinces=["CT"])
+    works_ct = Ordinanza(ord_id=2, category=OTHER, regions=["sicilia"], provinces=["CT"])
+    works_ta = Ordinanza(ord_id=3, category=OTHER, regions=["puglia"], provinces=["TA"])
+    works_puglia_no_prov = Ordinanza(ord_id=4, category=OTHER, regions=["puglia"], provinces=[])
+    assert matches(u, closure_ct) and not matches(u, works_ct)
+    assert matches(u, works_ta) and matches(u, works_puglia_no_prov)      # provincia non determinata: arriva
+    # zone dei cantieri vuote = le stesse delle chiusure (qui tutta Italia)
+    _subscribe(db, "V", all_italy=True, want_all=True)
+    assert matches(db.get_user("V"), works_ct)

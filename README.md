@@ -128,7 +128,7 @@ Scheda **Variables** (*New repository variable*):
 
 Gli utenti non installano nulla:
 1. entrano nel canale e ricevono il benvenuto con il pulsante 🗺️ **Scegli le zone**;
-2. scelgono le zone e i tipi di avviso dai menu: chiusure e aperture, limiti permanenti e, per chi vuole proprio tutto, **anche cantieri e restringimenti** (tutte le altre ordinanze delle stesse zone, titolo "🚧 LAVORI E LIMITAZIONI"; spenta di default, con Tutta Italia sono decine al giorno);
+2. scelgono le zone e i tipi di avviso dai menu: chiusure e aperture, limiti permanenti e, per chi vuole proprio tutto, **anche cantieri e restringimenti** (tutte le altre ordinanze; di default delle stesse zone, oppure di zone proprie scelte nel modulo: per esempio chiusure di tutta Italia ma cantieri solo della propria provincia, titolo "🚧 LAVORI E LIMITAZIONI"; spenta di default, con Tutta Italia sono decine al giorno);
 3. ricevono subito un **riepilogo delle ordinanze già in vigore** nelle zone scelte (le 30 più recenti; arriva al primo giro del job, entro un'ora) e da quel momento solo le novità, in privato. Cambiando zone arriva il riepilogo delle zone nuove, senza ripetere ciò che hanno già avuto.
 
 Possono cambiare le zone o mettere in pausa dalla scheda **Home** dell'app o con i comandi `/anas` (`/anas stato`, `/anas pausa`, `/anas riprendi`, `/anas aiuto`). Se escono dal canale gli avvisi si fermano, ma le preferenze restano salvate.

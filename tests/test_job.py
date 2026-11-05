@@ -317,7 +317,7 @@ def test_migration_never_stops_the_job():
             if sql.startswith("PRAGMA"):
                 raise D1Error("D1 HTTP 400: not authorized")
             if sql.startswith("ALTER"):
-                raise D1Error("D1 HTTP 400: duplicate column name: want_all")
+                raise D1Error("D1 HTTP 400: duplicate column name")
             return []
     b = NoPragma()
     assert migrate(b) == []                                 # colonna già presente: nessun errore, niente aggiunto
@@ -329,4 +329,4 @@ def test_migration_never_stops_the_job():
             if sql.startswith("PRAGMA"):
                 return [{"name": "user_id"}]
             return []
-    assert migrate(Fresh()) == ["users.want_all"]           # colonna mancante: aggiunta
+    assert migrate(Fresh()) == ["users.want_all", "users.all_regions", "users.all_provinces"]  # colonne mancanti: aggiunte
