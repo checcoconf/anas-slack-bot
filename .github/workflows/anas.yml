@@ -29,6 +29,9 @@ jobs:
         with:
           python-version: "3.13"
           cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-ai.txt
       - run: pip install -r requirements.txt
 
       # Secondo parere del modello locale (anas_bot/ai.py): facoltativo, se qualcosa fallisce il giro va avanti senza.
@@ -50,7 +53,7 @@ jobs:
       - name: Installa llama.cpp per Python
         if: vars.AI_MODE != 'off'
         continue-on-error: true
-        run: pip install llama-cpp-python
+        run: pip install -r requirements-ai.txt   # compilata la prima volta, poi presa dalla cache pip
 
       - name: Giro ANAS -> Slack
         run: python -m anas_bot.job

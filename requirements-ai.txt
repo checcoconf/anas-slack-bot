@@ -1,0 +1,3 @@
+# Secondo parere del modello locale (anas_bot/ai.py): facoltativo, installato dal workflow con continue-on-error.
+# Versione bloccata: la ruota compilata resta nella cache pip (chiave = questo file + requirements.txt).
+llama-cpp-python==0.3.36

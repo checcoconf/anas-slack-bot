@@ -14,27 +14,29 @@ Ogni utente sceglie le zone da menu a tendina: 🇮🇹 tutta Italia, 🗺️ re
 ## Come è fatto
 
 ```
-          Slack  ◄──────────────────────────────────────┐
-            │ eventi, pulsanti, modulo                  │ messaggi privati
-            ▼                                           │
- ┌─────────────────────────┐   ogni ora      ┌──────────┴──────────────┐
- │ Cloudflare Worker       │ ──────────────► │ GitHub Actions (Python) │
- │ (sempre acceso, gratis) │  avvia il job   │ scarica PDF ANAS,       │
- │ benvenuto, menu, Home   │                 │ classifica, invia       │
- └───────────┬─────────────┘                 └──────────┬──────────────┘
-             │            Cloudflare D1 (SQLite)        │
-             └──────────► iscritti, cursore, coda ◄─────┘
+          Slack  ◄─────────────────────────────────────────────────────┐
+            │ eventi, pulsanti, modulo             messaggi privati,    │
+            ▼                                     canale autostrade     │
+ ┌─────────────────────────┐  ogni ora: giro        ┌──────────────────┴───────────────────┐
+ │ Cloudflare Worker       │ ─────────────────────► │ GitHub Actions (Python)              │
+ │ (sempre acceso, gratis) │  al salvataggio:       │ giro orario: elenco Ordinanze Web    │
+ │ benvenuto, menu, Home   │  mini-job riepilogo    │ (10 richieste/ora), PDF di notte,    │
+ │ ponte verso ANAS ◄──────┼────────────────────────┤ classificazione a regole + secondo   │
+ │ (Milano)                │  richieste ad ANAS     │ parere del modello locale (Qwen 7B)  │
+ └───────────┬─────────────┘                        └──────────────────┬───────────────────┘
+             │               Cloudflare D1 (SQLite)                    │
+             └────────► iscritti, ordinanze, coda, budget orario ◄──────┘
 ```
 
 - **Cloudflare Worker** (cartella `worker/`, JavaScript). È la parte sempre accesa: risponde a Slack entro i 3 secondi richiesti.
-  - Manda il benvenuto a chi entra nel canale.
-  - Gestisce il modulo con i menu, la scheda Home e i comandi `/anas` (con sottocomandi: stato, pausa, riprendi, aiuto).
-  - Una volta l'ora avvia il job su GitHub (che dura quasi un'ora, una richiesta ad ANAS ogni 2-3 minuti).
+  - Manda il benvenuto (scheda Messaggi, o ingresso nel canale se configurato) e gestisce il modulo con i menu e la scheda Home.
+  - Una volta l'ora avvia il giro su GitHub; al salvataggio delle zone avvia il mini-job del riepilogo.
+  - Fa da **ponte verso ANAS**: il sito non accetta collegamenti dai server di GitHub (negli Stati Uniti), il Worker gira vicino a Milano e inoltra le richieste del job, firmate.
 - **GitHub Actions** (cartella `anas_bot/`, Python con l'SDK ufficiale `slack_sdk`). Fa il lavoro pesante:
-  - legge l'elenco ufficiale di [Ordinanze Web](https://www.stradeanas.it/it/ordinanze-web) e trova le ordinanze nuove;
-  - le classifica (scarica il PDF solo quando serve) e manda un messaggio riassuntivo per utente;
-  - ricontrolla i membri del canale.
-- **Cloudflare D1.** È il database condiviso tra le due parti. Contiene le ordinanze già viste, gli iscritti e la coda dei messaggi, quindi niente si perde e niente si ripete tra un giro e l'altro.
+  - legge l'elenco ufficiale di [Ordinanze Web](https://www.stradeanas.it/it/ordinanze-web) struttura per struttura, 10 richieste l'ora (tetto del firewall ANAS), tutta Italia ogni 2 ore e mezza; di notte le pagine profonde e i PDF;
+  - classifica con regole (chiusure, riaperture, limiti permanenti, tutto il resto) e chiede un **secondo parere al modello locale** (Qwen2.5 7B, gratis, sul runner) sulle chiusure e sulle parole nuove;
+  - manda i messaggi privati agli iscritti, le chiusure autostradali nel canale, il riepilogo iniziale a chi sceglie le zone; ricontrolla i membri del canale, se c'è.
+- **Cloudflare D1.** È il database condiviso: ordinanze viste, iscritti e zone, coda dei messaggi, budget orario delle richieste, cookie di sessione, vocabolario imparato. Niente si perde e niente si ripete tra un giro e l'altro.
 
 > Sui Worker gli SDK ufficiali di Slack non girano. Lì il codice chiama direttamente la Web API ufficiale di Slack (5 metodi) e verifica la firma di ogni richiesta, senza librerie di terzi.
 
