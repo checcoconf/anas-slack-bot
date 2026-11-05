@@ -210,6 +210,7 @@ def ordinanza_from_json(data: str) -> Ordinanza:
 
 
 RELEVANT = ("chiusura", "riapertura", "limite_velocita")
+UNREAD = 0  # parser_version delle ordinanze segnate come viste senza leggerle (installazione): nessun dettaglio
 
 _UPSERT_USER = "INSERT OR IGNORE INTO users(user_id, updated_at) VALUES(?,?)"
 
@@ -322,14 +323,17 @@ class Database:
         rows = self.b.query(f"SELECT data FROM ordinanze WHERE ord_id IN ({marks}) ORDER BY ord_id", tuple(ord_ids))
         return [ordinanza_from_json(r["data"]) for r in rows]
 
-    def in_force_ordinanze(self, today: date) -> list[Ordinanza]:
-        """Ordinanze utili ancora in vigore (per il riepilogo a chi si iscrive): già valutate (1) o già in
-        vigore all'installazione (3); la scadenza si filtra in SQL per non caricare tutto l'archivio."""
+    def in_force_ordinanze(self, today: date, categories: tuple[str, ...] = RELEVANT) -> list[Ordinanza]:
+        """Ordinanze ancora in vigore (per il riepilogo a chi si iscrive), già valutate dalla coda (1, 2) o già
+        in vigore all'installazione (3); la scadenza si filtra in SQL per non caricare tutto l'archivio.
+        Le "altre" (cantieri...) hanno stato 2 quando nessuno le voleva al momento della lettura."""
+        marks = ",".join("?" * len(categories))
         rows = self.b.query(
-            "SELECT data FROM ordinanze WHERE notify_state IN (1, 3) AND category IN (?,?,?) "
+            f"SELECT data FROM ordinanze WHERE notify_state IN (1, 2, 3) AND category IN ({marks}) "
             "AND (json_extract(data, '$.end_date') IS NULL OR json_extract(data, '$.end_date') = '' "
-            "OR json_extract(data, '$.end_date') >= ?)", (*RELEVANT, today.isoformat()))
-        return [o for o in (ordinanza_from_json(r["data"]) for r in rows) if not o.is_expired(today)]
+            "OR json_extract(data, '$.end_date') >= ?)", (*categories, today.isoformat()))
+        return [o for o in (ordinanza_from_json(r["data"]) for r in rows)
+                if not o.is_expired(today) and o.parser_version != UNREAD]  # le mai lette (solo viste) non si riepilogano
 
     def pending_ordinanze(self) -> list[Ordinanza]:
         rows = self.b.query("SELECT data FROM ordinanze WHERE notify_state=0 ORDER BY ord_id")

@@ -52,7 +52,7 @@ from .anas.listing import (
 from .anas.parser import CLOSURE, OTHER, REOPENING, Ordinanza, parse_ordinanza
 from .anas.vocabolario import unknown_measures
 from .config import Config
-from .db import RELEVANT, Database
+from .db import RELEVANT, UNREAD, Database
 from .geo import PROVINCE_BY_CODE, find_provinces, norm
 from .poller import BLOCKED_UNTIL  # chiave in D1: time.time() fino a cui non si interroga ANAS
 
@@ -60,7 +60,6 @@ log = logging.getLogger(__name__)
 
 _REF_NUMBER = re.compile(r"\b(\d{1,5})\s*/\s*(\d{4})\s*/\s*([A-Z]{2,3})\b")
 MAX_CARRY_PAGES = 6  # pagine in più che la lettura veloce può accumulare se arrivano molte novità
-UNREAD = 0  # parser_version delle ordinanze segnate come viste senza leggerne il PDF
 _INHERITED = ("category", "roads", "road_names", "km_from", "km_to", "provinces", "regions", "province_inferred",
               "start_date", "time_window", "speed_kmh", "speeds", "ramp_only", "new_road", "direction", "excerpt")
 
@@ -92,6 +91,7 @@ class ListingPoller:
         self.source = source  # PdfSource: per proroghe/revoche e per trovare le province
         self.cfg = cfg
         self.pdf_budget = cfg.max_pdf_per_run  # PDF ancora scaricabili in questo giro
+        self._province_regions: set[str] = set()  # calcolato a ogni giro (run)
         self.deep = False  # True nelle ore notturne (LISTING_DEEP_HOURS): più pagine, e i PDF
         self.after_structure = None  # callback senza argomenti: il job manda i messaggi in coda (giro lungo)
         self.watermark = 0  # ID più alto visto al primo giro: sotto è "già in vigore prima del bot"
@@ -183,6 +183,16 @@ class ListingPoller:
                     return  # tetto dei PDF esaurito: la rimandiamo intera al giro dopo
                 text = self._fetch_text(ord_id) or ""
                 self._enrich_provinces(o, text)
+            elif o.category not in RELEVANT and not o.provinces and not text \
+                    and set(o.regions) & self._province_regions:
+                # "altra" ordinanza senza provincia nel testo, in una regione dove qualcuno segue le "altre"
+                # per provincia: la provincia si legge dal PDF, di notte; fino ad allora resta in sospeso
+                # (non si consegna "nel dubbio" a tutta la regione)
+                if not self.deep or self.pdf_budget <= 0:
+                    res.deferred += 1
+                    return
+                text = self._fetch_text(ord_id) or ""
+                self._enrich_provinces(o, text)
             measures = [m for p in split_provisions(rec.get("RIEPILOGO", "")) for m in p.measures]
             for m in unknown_measures(measures):
                 res.unknown.setdefault(m, url)
@@ -243,6 +253,10 @@ class ListingPoller:
             return res
 
         self.pdf_budget = self.cfg.max_pdf_per_run
+        # regioni in cui almeno un iscritto segue le "altre ordinanze" per singola provincia: lì la provincia
+        # delle "altre" va letta dal PDF (di notte), perché "nel dubbio a tutta la regione" non vale per loro
+        self._province_regions = {PROVINCE_BY_CODE[p].region for u in self.db.all_users() if u.receives and u.want_all
+                                  for p in u.all_provinces if p in PROVINCE_BY_CODE}
         try:
             self._fast_structures(today, installed, res, late)
         except BudgetExhausted as exc:

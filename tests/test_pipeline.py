@@ -307,7 +307,28 @@ def test_cantieri_can_have_their_own_zones(db, cfg):
     works_ta = Ordinanza(ord_id=3, category=OTHER, regions=["puglia"], provinces=["TA"])
     works_puglia_no_prov = Ordinanza(ord_id=4, category=OTHER, regions=["puglia"], provinces=[])
     assert matches(u, closure_ct) and not matches(u, works_ct)
-    assert matches(u, works_ta) and matches(u, works_puglia_no_prov)      # provincia non determinata: arriva
+    assert matches(u, works_ta) and not matches(u, works_puglia_no_prov)  # provincia ignota: NON "nel dubbio"
     # zone dei cantieri vuote = le stesse delle chiusure (qui tutta Italia)
     _subscribe(db, "V", all_italy=True, want_all=True)
     assert matches(db.get_user("V"), works_ct)
+
+
+def test_digest_includes_cantieri_of_their_own_zones(db, cfg):
+    """Chi accende i cantieri con zone proprie riceve, a parte, i cantieri in vigore in quelle zone;
+    e cambiare solo le zone dei cantieri fa ripartire il riepilogo."""
+    from anas_bot.digest import Digest
+    src = FakeSource({100: s.CLOSURE_SS614, 103: s.LANE_ONLY})      # Abruzzo: una chiusura e un cantiere (corsie)
+    Poller(db, src, cfg).run_cycle()
+    Notifier(db, FakeSlack()).run(TODAY)                             # nessun iscritto: valutate, a nessuno
+    _subscribe(db, "U", all_italy=True)
+    slack = FakeSlack()
+    assert Digest(db, slack).run(TODAY) == 1
+    assert len(slack.posts_to("U")) == 1 and "🚧" not in slack.posts_to("U")[0]["text"]   # solo Waze
+    db.save_preferences("U", all_italy=True, regions=[], provinces=[], want_closures=True, want_speed=True,
+                        want_all=True, all_regions=["abruzzo"])
+    assert Digest(db, slack).run(TODAY) == 1                         # zone dei cantieri nuove: riparte
+    texts = [p["text"] for p in slack.posts_to("U")]
+    assert len(texts) == 2 and "altra ordinanza" in texts[1] and "SS614" not in texts[1]   # la chiusura non si ripete
+    db.save_preferences("U", all_italy=True, regions=[], provinces=[], want_closures=True, want_speed=True,
+                        want_all=True, all_regions=["lazio"])
+    assert Digest(db, slack).run(TODAY) == 1 and len(slack.posts_to("U")) == 2   # Lazio: niente cantieri, niente messaggio

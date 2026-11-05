@@ -78,7 +78,7 @@ test("cantieri con zone proprie: salvate solo se la voce è accesa, mostrate nel
   assert.equal(row.want_all, 1);
   assert.equal(row.all_provinces, '["TA"]');
   assert.equal(row.all_regions, "[]");                                   // regione inesistente scartata
-  assert.match(slackCalls("chat.postMessage").at(-1).body.blocks[0].text.text, /cantieri e restringimenti \(solo: .*Taranto/);
+  assert.match(slackCalls("chat.postMessage").at(-1).body.blocks[0].text.text, /tutte le altre ordinanze \(solo: .*Taranto/);
   const modal = (await import("../src/views.js")).preferencesModal(await getUser(env.DB, "U7"));
   const apBlock = modal.blocks.find((b) => b.block_id === G.ids.allProvinces[0]);
   assert.deepEqual(apBlock.element.initial_options.map((o) => o.value), ["TA"]);   // riaperto: la provincia è preselezionata
@@ -222,11 +222,11 @@ test("scheda Messaggi aperta da un nuovo utente: benvenuto una volta sola, mai d
   assert.equal(slackCalls("chat.postMessage").length, 1);          // un bot non si saluta
 });
 
-test("terza voce: anche cantieri e restringimenti (want_all)", async () => {
+test("terza voce: tutte le altre ordinanze (want_all)", async () => {
   await submit("U7", { regions: ["sicilia"], kinds: ["closures", "all"] });
   const row = await env.DB.prepare("SELECT want_closures, want_speed, want_all FROM users WHERE user_id='U7'").first();
   assert.deepEqual([row.want_closures, row.want_speed, row.want_all], [1, 0, 1]);
-  assert.match(slackCalls("chat.postMessage").at(-1).body.blocks[0].text.text, /anche cantieri e restringimenti/);
+  assert.match(slackCalls("chat.postMessage").at(-1).body.blocks[0].text.text, /tutte le altre ordinanze/);
   await submit("U7", { regions: ["sicilia"], kinds: ["closures"] });
   const row2 = await env.DB.prepare("SELECT want_all FROM users WHERE user_id='U7'").first();
   assert.equal(row2.want_all, 0);

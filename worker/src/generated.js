@@ -1404,6 +1404,9 @@ export default {
     }
    },
    {
+    "type": "divider"
+   },
+   {
     "type": "input",
     "block_id": "kinds_block",
     "label": {
@@ -1444,13 +1447,13 @@ export default {
       {
        "text": {
         "type": "plain_text",
-        "text": "🚧 Anche cantieri e restringimenti",
+        "text": "🚧 Tutte le altre ordinanze",
         "emoji": true
        },
        "value": "all",
        "description": {
         "type": "plain_text",
-        "text": "Tutte le altre ordinanze delle tue zone: corsie ridotte, sensi unici, limit",
+        "text": "Cantieri, corsie ridotte, sensi unici, limiti temporanei… (tante)",
         "emoji": true
        }
       }
@@ -1483,11 +1486,6 @@ export default {
        }
       }
      ]
-    },
-    "hint": {
-     "type": "plain_text",
-     "text": "🧪 Il filtro \"utili per Waze\" è in beta: può sbagliare.",
-     "emoji": true
     }
    },
    {
@@ -1500,12 +1498,22 @@ export default {
     ]
    },
    {
+    "type": "divider"
+   },
+   {
+    "type": "section",
+    "text": {
+     "type": "mrkdwn",
+     "text": "*🚧 Zone per le altre ordinanze* (solo se le hai accese sopra)\nLascia vuoto per usare le stesse zone. Oppure restringile: per esempio chiusure di tutta Italia, ma cantieri e restringimenti solo della tua provincia."
+    }
+   },
+   {
     "type": "input",
     "block_id": "all_regions_block",
     "optional": true,
     "label": {
      "type": "plain_text",
-     "text": "🚧 Zone per cantieri e restringimenti (se diverse da quelle sopra)",
+     "text": "🗺️ Regioni",
      "emoji": true
     },
     "element": {
@@ -1513,7 +1521,7 @@ export default {
      "action_id": "all_regions",
      "placeholder": {
       "type": "plain_text",
-      "text": "Regioni per i cantieri (vuoto = le stesse di sopra)",
+      "text": "Regioni (vuoto = le stesse di sopra)",
       "emoji": true
      },
      "options": [
@@ -1694,7 +1702,7 @@ export default {
     "optional": true,
     "label": {
      "type": "plain_text",
-     "text": "🚧 ...e province",
+     "text": "📍 Province",
      "emoji": true
     },
     "element": {
@@ -1702,7 +1710,7 @@ export default {
      "action_id": "all_provinces",
      "placeholder": {
       "type": "plain_text",
-      "text": "Province per i cantieri (vuoto = le stesse di sopra)",
+      "text": "Province (vuoto = le stesse di sopra)",
       "emoji": true
      },
      "option_groups": [
@@ -2767,11 +2775,6 @@ export default {
        ]
       }
      ]
-    },
-    "hint": {
-     "type": "plain_text",
-     "text": "Es. chiusure di tutta Italia, ma cantieri solo della tua provincia. Vuoto =",
-     "emoji": true
     }
    }
   ]

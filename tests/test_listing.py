@@ -640,3 +640,31 @@ def test_hourly_ledger_waits_and_then_gives_up(tmp_path):
         strict.before_request()
 
 
+
+
+def test_other_ordinance_without_province_waits_for_the_night_pdf_when_someone_follows_a_province(env):
+    """Chi segue le "altre ordinanze" per provincia (Taranto) non deve ricevere tutta la Puglia: di giorno
+    l'ordinanza senza provincia resta in sospeso, di notte si legge il PDF e si consegna solo se è di Taranto."""
+    cfg, db, listing, src = env
+    p = ListingPoller(db, listing, src, cfg)
+    _install(p, listing)
+    db.ensure_user("U_TA")
+    db.save_preferences("U_TA", all_italy=True, regions=[], provinces=[], want_closures=True, want_speed=True,
+                        want_all=True, all_provinces=["TA"])
+    cfg.listing_deep_pages = 1
+    works = _rec(213800, _riep("SS 7 APPIA", "su <strong>corsia di marcia</strong>,", ["restringimento carreggiata"],
+                               "a partire dal <strong>03/11/2026</strong> fino al <strong>30/11/2026</strong>"))
+    listing.pages["BA"].insert(0, works)
+    r = p.run(date(2026, 11, 3), hour=14)
+    assert r.new == 0 and r.deferred == 1 and src.requests == []          # giorno: in sospeso, nessun PDF
+    src.docs[213800] = "ALLA PREFETTURA DI TARANTO\nAL COMUNE DI GROTTAGLIE\nORDINANZA N. 900/2026/BA\nrestringimento carreggiata SS 7"
+    r = p.run(date(2026, 11, 4), hour=3)
+    assert r.new == 1 and r.deferred == 0 and src.requests == [213800]    # notte: PDF letto
+    o = db.get_ordinanza(213800)
+    assert o.provinces == ["TA"] and o.category == "altro"
+    # senza iscritti per provincia nelle "altre", niente PDF: si salva subito (la regione basta)
+    db.save_preferences("U_TA", all_italy=True, regions=[], provinces=[], want_closures=True, want_speed=True,
+                        want_all=True, all_regions=["puglia"])
+    listing.pages["BA"].insert(0, _rec(213801, works["RIEPILOGO"]))
+    r = p.run(date(2026, 11, 4), hour=14)
+    assert r.new == 1 and r.deferred == 0 and src.requests == [213800]

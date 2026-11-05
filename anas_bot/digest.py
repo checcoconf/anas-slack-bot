@@ -17,6 +17,7 @@ from datetime import date
 
 from slack_sdk.errors import SlackApiError
 
+from .anas.parser import OTHER
 from .db import Database, User
 from .matching import matches
 from .views import digest_messages
@@ -27,7 +28,8 @@ MAX_ITEMS = 30
 
 
 def _signature(u: User) -> str:
-    return json.dumps([u.all_italy, u.regions, u.provinces, u.want_closures, u.want_speed])
+    return json.dumps([u.all_italy, u.regions, u.provinces, u.want_closures, u.want_speed,
+                       u.want_all, u.all_regions, u.all_provinces])
 
 
 class Digest:
@@ -42,29 +44,36 @@ class Digest:
         if not due:
             return 0
         in_force = self.db.in_force_ordinanze(today)
+        others = self.db.in_force_ordinanze(today, (OTHER,)) if any(u.want_all for u in due) else []
         served = 0
         for u in due:
+            first = self.db.get(f"digest:{u.user_id}") is None  # primo riepilogo: anche "nessuna in vigore"
             done = self.db.delivered_ids(u.user_id)
-            mine = [o for o in in_force if o.ord_id not in done and matches(u, o, self.fallback)]
-            mine.sort(key=lambda o: (o.start_date, o.ord_id), reverse=True)  # le più recenti prima
-            shown = mine[:MAX_ITEMS]
+            # due riepiloghi separati: le ordinanze utili per Waze e, per chi le vuole, i cantieri delle loro zone
+            lists = [(in_force, "waze")] + ([(others, "cantieri")] if u.want_all else [])
             try:
                 channel = self.client.conversations_open(users=u.user_id)["channel"]["id"]
-                for msg, ids in digest_messages(shown, total=len(mine)):
-                    self.client.chat_postMessage(channel=channel, text=msg["text"], blocks=msg["blocks"],
-                                                 unfurl_links=False, unfurl_media=False)
-                    if ids:
-                        self.db.record_deliveries(u.user_id, ids, "sent")
+                for source, kind in lists:
+                    mine = [o for o in source if o.ord_id not in done and matches(u, o, self.fallback)]
+                    mine.sort(key=lambda o: (o.start_date, o.ord_id), reverse=True)  # le più recenti prima
+                    shown = mine[:MAX_ITEMS]
+                    if not shown and (kind == "cantieri" or not first):
+                        continue  # niente di nuovo da riepilogare: "nessuna in vigore" solo al primo riepilogo
+                    for msg, ids in digest_messages(shown, total=len(mine), kind=kind):
+                        self.client.chat_postMessage(channel=channel, text=msg["text"], blocks=msg["blocks"],
+                                                     unfurl_links=False, unfurl_media=False)
+                        if ids:
+                            self.db.record_deliveries(u.user_id, ids, "sent")
+                    # le non mostrate (oltre MAX_ITEMS) non arriveranno più: sono su Ordinanze Web
+                    rest = [o.ord_id for o in mine[MAX_ITEMS:]]
+                    if rest:
+                        self.db.record_deliveries(u.user_id, rest, "skipped")
             except SlackApiError as exc:
                 log.warning("Riepilogo non inviato: %s", exc.response.get("error") if exc.response else exc)
                 continue  # si riprova al giro dopo (la chiave non viene aggiornata)
             except OSError as exc:
                 log.warning("Riepilogo non inviato, Slack non raggiungibile: %s", exc)
                 break
-            # le non mostrate (oltre MAX_ITEMS) non arriveranno più: sono su Ordinanze Web
-            rest = [o.ord_id for o in mine[MAX_ITEMS:]]
-            if rest:
-                self.db.record_deliveries(u.user_id, rest, "skipped")
             self.db.set(f"digest:{u.user_id}", _signature(u))
             served += 1
         return served

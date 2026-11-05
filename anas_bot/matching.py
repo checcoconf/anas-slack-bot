@@ -46,9 +46,10 @@ def matches(user: User, o: Ordinanza, unknown_province_fallback: bool = True) ->
 
     Le ordinanze "altre" (cantieri, restringimenti...) hanno zone proprie, se l'utente le ha scelte:
     si può seguire tutta Italia per le chiusure e una sola provincia per i cantieri. Zone dei cantieri
-    vuote = le stesse zone delle chiusure."""
+    vuote = le stesse zone delle chiusure. Per le "altre" seguite per provincia non vale il "nel dubbio
+    arriva": la provincia si legge dal PDF di notte (listing_poller), e se manca non si consegna."""
     if not user.receives or not wants_category(user, o):
         return False
     if o.category not in (CLOSURE, REOPENING, SPEED) and (user.all_regions or user.all_provinces):
-        return in_zones(o, False, user.all_regions, user.all_provinces, unknown_province_fallback)
+        return in_zones(o, False, user.all_regions, user.all_provinces, unknown_province_fallback=False)
     return in_zones(o, user.all_italy, user.regions, user.provinces, unknown_province_fallback)

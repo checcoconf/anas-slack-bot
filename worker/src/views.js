@@ -91,7 +91,7 @@ export function describeKinds(u) {
   if (u.wantSpeed) k.push("🚦 limiti di velocità permanenti");
   if (u.wantAll) {
     const zones = describeZones({ allItaly: false, regions: u.allRegions ?? [], provinces: u.allProvinces ?? [] });
-    k.push("🚧 anche cantieri e restringimenti" + (u.allRegions?.length || u.allProvinces?.length ? ` (solo: ${zones.replace("\n", ", ")})` : ""));
+    k.push("🚧 tutte le altre ordinanze" + (u.allRegions?.length || u.allProvinces?.length ? ` (solo: ${zones.replace("\n", ", ")})` : ""));
   }
   return k.join(" · ") || "nessuno";
 }

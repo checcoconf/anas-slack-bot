@@ -78,8 +78,8 @@ _KIND_OPTIONS = {
                     "description": _txt("Strade, rampe e svincoli chiusi o aperti, nuove strade")},
     KIND_SPEED: {"text": _txt("🚦 Limiti di velocità permanenti"), "value": KIND_SPEED,
                  "description": _txt("Nuovi limiti definitivi sulle strade ANAS")},
-    KIND_ALL: {"text": _txt("🚧 Anche cantieri e restringimenti"), "value": KIND_ALL,
-               "description": _txt("Tutte le altre ordinanze delle tue zone: corsie ridotte, sensi unici, limiti temporanei (tante!)")},
+    KIND_ALL: {"text": _txt("🚧 Tutte le altre ordinanze"), "value": KIND_ALL,
+               "description": _txt("Cantieri, corsie ridotte, sensi unici, limiti temporanei… (tante)")},
 }
 
 
@@ -107,12 +107,12 @@ def preferences_modal(user: User | None) -> dict:
     if kinds_initial:
         kinds_el["initial_options"] = kinds_initial
     all_regions_el: dict = {"type": "multi_static_select", "action_id": A_ALL_REGIONS,
-                            "placeholder": _txt("Regioni per i cantieri (vuoto = le stesse di sopra)"),
+                            "placeholder": _txt("Regioni (vuoto = le stesse di sopra)"),
                             "options": region_options()}
     if u.all_regions:
         all_regions_el["initial_options"] = [_region_option(r) for r in u.all_regions if r in REGIONS or r == MOTORWAYS]
     all_provinces_el: dict = {"type": "multi_static_select", "action_id": A_ALL_PROVINCES,
-                              "placeholder": _txt("Province per i cantieri (vuoto = le stesse di sopra)"),
+                              "placeholder": _txt("Province (vuoto = le stesse di sopra)"),
                               "option_groups": province_option_groups()}
     if u.all_provinces:
         all_provinces_el["initial_options"] = [_province_option(p) for p in u.all_provinces if p in PROVINCE_BY_CODE]
@@ -133,15 +133,18 @@ def preferences_modal(user: User | None) -> dict:
              "element": regions_el},
             {"type": "input", "block_id": B_PROVINCES, "optional": True, "label": _txt("📍 Singole province"),
              "element": provinces_el, "hint": _txt("🔍 Scrivi nel menu per cercare, es. \"Cun\" per Cuneo")},
-            {"type": "input", "block_id": B_KINDS, "label": _txt("🔔 Cosa vuoi ricevere"), "element": kinds_el,
-             "hint": _txt("🧪 Il filtro \"utili per Waze\" è in beta: può sbagliare.")},  # Slack mostra una riga sola
+            {"type": "divider"},
+            {"type": "input", "block_id": B_KINDS, "label": _txt("🔔 Cosa vuoi ricevere"), "element": kinds_el},
             {"type": "context", "elements": [{"type": "mrkdwn", "text": BETA_NOTICE}]},
-            {"type": "input", "block_id": B_ALL_REGIONS, "optional": True,
-             "label": _txt("🚧 Zone per cantieri e restringimenti (se diverse da quelle sopra)"),
+            {"type": "divider"},
+            {"type": "section", "text": {"type": "mrkdwn", "text":
+                "*🚧 Zone per le altre ordinanze* (solo se le hai accese sopra)\n"
+                "Lascia vuoto per usare le stesse zone. Oppure restringile: per esempio chiusure di tutta Italia, "
+                "ma cantieri e restringimenti solo della tua provincia."}},
+            {"type": "input", "block_id": B_ALL_REGIONS, "optional": True, "label": _txt("🗺️ Regioni"),
              "element": all_regions_el},
-            {"type": "input", "block_id": B_ALL_PROVINCES, "optional": True, "label": _txt("🚧 ...e province"),
-             "element": all_provinces_el,
-             "hint": _txt("Es. chiusure di tutta Italia, ma cantieri solo della tua provincia. Vuoto = stesse zone.")},
+            {"type": "input", "block_id": B_ALL_PROVINCES, "optional": True, "label": _txt("📍 Province"),
+             "element": all_provinces_el},
         ],
     }
 
@@ -266,8 +269,10 @@ _SHORT = {CLOSURE: "⛔ chiusura", REOPENING: "✅ apertura", SPEED: "🚦 limit
 ORDINANZE_WEB_URL = "https://www.stradeanas.it/it/ordinanze-web"
 
 
-def digest_messages(ords: list[Ordinanza], total: int, per_message: int = 15) -> list[tuple[dict, list[int]]]:
-    """Riepilogo delle ordinanze già in vigore nelle zone appena scelte (ords = le più recenti, total = tutte)."""
+def digest_messages(ords: list[Ordinanza], total: int, per_message: int = 15,
+                    kind: str = "waze") -> list[tuple[dict, list[int]]]:
+    """Riepilogo delle ordinanze già in vigore nelle zone appena scelte (ords = le più recenti, total = tutte).
+    kind="waze": chiusure, aperture e limiti; kind="cantieri": tutte le altre, per chi le ha chieste."""
     if not ords:
         msg = {"text": "📋 Al momento nessuna ordinanza ANAS in vigore nelle tue zone.",
                "blocks": [{"type": "section", "text": {"type": "mrkdwn", "text":
@@ -279,7 +284,10 @@ def digest_messages(ords: list[Ordinanza], total: int, per_message: int = 15) ->
     parts = (n - 1) // per_message + 1
     for i in range(0, n, per_message):
         chunk = ords[i:i + per_message]
-        title = f"📋 {total} ordinanz{'a' if total == 1 else 'e'} ANAS in vigore nelle tue zone"
+        if kind == "cantieri":
+            title = f"🚧 {total} altr{'a ordinanza' if total == 1 else 'e ordinanze'} ANAS in vigore nelle zone scelte"
+        else:
+            title = f"📋 {total} ordinanz{'a' if total == 1 else 'e'} ANAS in vigore nelle tue zone"
         if parts > 1:
             title += f" ({i // per_message + 1}/{parts})"
         note = (f"Le {n} più recenti; le altre {total - n} su <{ORDINANZE_WEB_URL}|Ordinanze Web>."
