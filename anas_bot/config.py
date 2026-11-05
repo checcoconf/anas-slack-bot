@@ -70,7 +70,9 @@ class Config:
     # richiesta nell'ora scorrevole. Ieri 19 in 55 minuti erano passate solo dopo due ore di silenzio.
     # Un blocco costa un'ora di silenzio (12 richieste perse): meglio 2 richieste in meno che un blocco.
     max_requests_per_hour: int = 10  # tetto per ora scorrevole, contato attraverso i giri (anas/budget.py)
-    max_pdf_per_run: int = 3  # PDF scaricati al massimo per giro (gli altri slittano al giro dopo)
+    max_pdf_per_run: int = 3  # PDF scaricati al massimo per giro di notte (gli altri slittano al giro dopo)
+    # Di giorno: PDF solo per chiusure e limiti senza provincia (1 richiesta su 10, poi l'atlante la impara)
+    max_pdf_per_run_day: int = 1
     block_pause_minutes: int = 60  # dopo una pagina di blocco del firewall: niente richieste per un'ora
     max_requests_per_cycle: int = 4  # canale a numeri (di riserva): PDF provati per giro, pochi per il firewall
     max_gap: int = 25
@@ -130,6 +132,7 @@ class Config:
         c.worker_url = _str("WORKER_URL", c.worker_url)
         c.request_delay_seconds = float(_str("REQUEST_DELAY_SECONDS", str(c.request_delay_seconds)))
         c.max_pdf_per_run = _int("MAX_PDF_PER_RUN", c.max_pdf_per_run)
+        c.max_pdf_per_run_day = _int("MAX_PDF_PER_RUN_DAY", c.max_pdf_per_run_day)
         c.max_requests_per_hour = _int("MAX_REQUESTS_PER_HOUR", c.max_requests_per_hour)
         c.block_pause_minutes = _int("BLOCK_PAUSE_MINUTES", c.block_pause_minutes)
         c.max_requests_per_cycle = _int("MAX_REQUESTS_PER_CYCLE", c.max_requests_per_cycle)

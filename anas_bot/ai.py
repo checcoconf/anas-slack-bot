@@ -28,6 +28,8 @@ import time
 log = logging.getLogger(__name__)
 
 MAX_TEXT = 3000  # caratteri di riepilogo + PDF passati al modello (il contesto è 4k token)
+MAX_CALLS_PER_RUN = 15  # oltre, il giro va avanti con le sole regole: il modello non deve rallentare la lettura
+MAX_SECONDS_PER_RUN = 600  # idem se i pareri hanno già preso 10 minuti del giro
 
 SYSTEM = (
     "Sei un assistente che legge ordinanze stradali di ANAS per gli editor della mappa Waze. "
@@ -53,6 +55,21 @@ Contesto: {text}
 Questa voce può indicare che un tratto di strada viene chiuso a tutte le automobili? Rispondi con una sola riga:
 CHIUSURA: si | no
 MOTIVO: una frase breve"""
+
+PROVINCE_PROMPT = """Tratto di strada statale italiana gestita da ANAS:
+- strada: {road}
+- chilometri: {km}
+- regione: {region}
+- direzione indicata: {direction}
+In quale provincia (o province) italiana si trova questo tratto? Usa la tua conoscenza della geografia
+stradale italiana. Se non sei sicuro, dichiaralo: una provincia sbagliata è peggio di nessuna.
+Rispondi con tre righe nel formato:
+PROVINCE: sigle separate da virgola (es. NA oppure NA, SA)
+CERTEZZA: alta | media | bassa
+MOTIVO: una frase breve"""
+
+_PROVS = re.compile(r"province\s*:\s*([A-Za-z ,]+)", re.I)
+_CERT = re.compile(r"certezza\s*:\s*(alta|media|bassa)", re.I)
 
 _VERDICT = re.compile(r"verdetto\s*:\s*(chiusura_totale|accesso_chiuso|non_chiusura)", re.I)
 _CLOSES = re.compile(r"chiusura\s*:\s*(si|sì|no)\b", re.I)
@@ -97,6 +114,11 @@ class LocalModel:
 
     def ask(self, prompt: str) -> str | None:
         """Risposta del modello, None se qualcosa va storto (mai un'eccezione verso il chiamante)."""
+        if self.calls >= MAX_CALLS_PER_RUN or self.seconds >= MAX_SECONDS_PER_RUN:
+            if self.calls == MAX_CALLS_PER_RUN or self.seconds >= MAX_SECONDS_PER_RUN:
+                log.info("Modello locale: tetto del giro raggiunto (%d pareri, %.0f s): da qui solo regole", self.calls, self.seconds)
+            self.calls += 1
+            return None
         t0 = time.monotonic()
         try:
             if self._generate is not None:
@@ -125,6 +147,21 @@ class LocalModel:
             return None
         reason = _REASON.search(out)
         return m.group(1).lower(), (reason.group(1).strip() if reason else "")[:200]
+
+    def province_guess(self, road: str, km: str, region: str, direction: str) -> tuple[list[str], str, str] | None:
+        """([sigle], certezza, motivo) oppure None se non risponde nel formato. Chi chiama decide se fidarsi
+        (solo con certezza "alta" e province dentro la regione)."""
+        out = self.ask(PROVINCE_PROMPT.format(road=road or "?", km=km or "non indicati", region=region or "?",
+                                              direction=direction or "non indicata"))
+        if not out:
+            return None
+        provs, cert = _PROVS.search(out), _CERT.search(out)
+        if not provs or not cert:
+            log.info("Modello locale: risposta fuori formato, ignorata: %r", out[:120])
+            return None
+        codes = sorted({c.strip().upper() for c in provs.group(1).split(",") if 1 < len(c.strip()) <= 2})
+        reason = _REASON.search(out)
+        return codes, cert.group(1).lower(), (reason.group(1).strip() if reason else "")[:200]
 
     def measure_closes(self, measure: str, text: str) -> tuple[bool, str] | None:
         """(True se la voce può indicare una chiusura, motivo) oppure None se non risponde nel formato."""

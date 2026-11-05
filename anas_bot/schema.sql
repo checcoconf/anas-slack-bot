@@ -44,6 +44,16 @@ CREATE TABLE IF NOT EXISTS users (
     updated_at REAL
 );
 
+-- atlante imparato: strada + chilometri (in metri, -1 = ignoti) -> province, dai PDF letti (anas_bot/atlante.py)
+CREATE TABLE IF NOT EXISTS atlante (
+    road TEXT NOT NULL,
+    km_from INTEGER NOT NULL,
+    km_to INTEGER NOT NULL,
+    provinces TEXT NOT NULL,
+    ord_id INTEGER NOT NULL,
+    PRIMARY KEY (road, km_from, km_to)
+);
+
 -- coda dei messaggi: status pending | sent | failed | skipped
 CREATE TABLE IF NOT EXISTS deliveries (
     user_id TEXT NOT NULL,

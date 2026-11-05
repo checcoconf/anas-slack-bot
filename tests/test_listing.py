@@ -176,6 +176,7 @@ class FakeListing:
 @pytest.fixture
 def env(tmp_path):
     cfg = Config()
+    cfg.max_pdf_per_run_day = 0  # i test sulla provincia diurna lo accendono da soli
     db = Database.local(str(tmp_path / "l.sqlite3"))
     old = [_closure(300 + i, "20/10/2026") for i in range(12)]  # chiusure già in vigore prima del bot
     pages = {"BA": [*BARI["results"], *old], "MI": [_closure(500, "01/09/2026", numero="10/2026/MI")]}
@@ -351,17 +352,18 @@ def test_by_day_closures_go_out_without_pdf_and_extensions_wait_for_the_night(en
     """Di giorno il budget va alle prime pagine: una chiusura nuova parte subito senza PDF (regione della
     struttura, provincia non determinata); una proroga, che senza PDF non si capisce, aspetta la notte."""
     cfg, db, listing, src = env
+    cfg.max_pdf_per_run_day = 1
     p = ListingPoller(db, listing, src, cfg)
     _install(p, listing)
     cfg.listing_deep_pages = 1
     listing.pages["BA"].insert(0, _closure(213700, "03/11/2026"))
     listing.pages["BA"].insert(0, {**BARI["results"][0], "ID": "213701", "NUMERO_ORDINANZA": "900/2026/BA"})  # proroga
     r = p.run(date(2026, 11, 2), hour=14)
-    assert r.new == 1 and r.relevant == 1 and r.deferred == 1 and src.requests == []
+    assert r.new == 1 and r.relevant == 1 and r.deferred == 1 and src.requests == [213700]   # 1 PDF di giorno: la provincia della chiusura
     assert [o.ord_id for o in _useful(db)] == [213700]
     src.docs[213701] = s.EXTENSION_BARI
     r = p.run(date(2026, 11, 3), hour=3)                      # notte: la proroga si legge dal PDF
-    assert r.deferred == 0 and src.requests == [213701]
+    assert r.deferred == 0 and src.requests == [213700, 213701]
 
 
 def test_many_new_ordinances_are_read_across_runs(env):
@@ -701,3 +703,58 @@ def test_one_carriageway_closed_with_contraflow_on_the_other_is_a_directional_cl
                 "<strong>20/11/2026</strong> Interesser&agrave;: tutti gli utenti<br>")
         o = record_to_ordinanza(_rec(990, riep), "Puglia", "u")
         assert o.category == CLOSURE and o.direction == "verso Bari" and not o.uncertain, measure
+
+
+def test_atlas_learns_province_from_pdf_and_reuses_it_without_pdf(env):
+    """La prima chiusura sulla SS 16 km 800-805 legge il PDF (1 al giorno per giro) e impara "Bari";
+    la seconda sullo stesso tratto ha la provincia senza PDF. Un tratto diverso non eredita niente."""
+    from anas_bot.atlante import Atlante, km_to_m
+    assert km_to_m("12+500") == 12500 and km_to_m("7") == 7000 and km_to_m("") is None
+    cfg, db, listing, src = env
+    cfg.max_pdf_per_run_day = 1
+    p = ListingPoller(db, listing, src, cfg)
+    _install(p, listing)
+    src.docs[214000] = "ALLA PREFETTURA DI BARI\nAL COMUNE DI MOLA DI BARI\nORDINANZA N. 1/2026/BA\nchiusura"
+    listing.pages["BA"].insert(0, _closure(214000, "03/11/2026"))               # SS 16, km dal riepilogo
+    r = p.run(date(2026, 11, 3), hour=14)
+    o = db.get_ordinanza(214000)
+    assert r.relevant == 1 and src.requests == [214000] and o.provinces == ["BA"]
+    atl = Atlante(db.b)
+    assert atl.lookup(["SS16"], o.km_from, o.km_to) == ["BA"]                 # imparato
+    assert atl.lookup(["SS16"], "500+000", "501+000") == []                    # altro tratto: non sa
+    assert atl.lookup(["SS99"], "", "") == []
+    listing.pages["BA"].insert(0, _closure(214001, "04/11/2026"))               # stesso tratto, il giorno dopo
+    r = p.run(date(2026, 11, 4), hour=14)
+    o2 = db.get_ordinanza(214001)
+    assert o2.provinces == ["BA"] and o2.province_inferred and src.requests == [214000]   # nessun PDF in più
+
+
+def test_daytime_pdf_is_at_most_one_per_run(env):
+    cfg, db, listing, src = env
+    cfg.max_pdf_per_run_day = 1
+    p = ListingPoller(db, listing, src, cfg)
+    _install(p, listing)
+    for i in range(3):
+        listing.pages["BA"].insert(0, _rec(214100 + i, _riep(f"SS {700 + i}", "su <strong>tutte le corsie</strong>,", ["chiusura al traffico"],
+                                                            "a partire dal <strong>03/11/2026</strong>")))
+    for i in range(3):
+        src.docs[214100 + i] = "ALLA PREFETTURA DI TARANTO\nORDINANZA\nchiusura"
+    r = p.run(date(2026, 11, 3), hour=14)
+    assert r.relevant == 1 and r.deferred == 2 and len(src.requests) == 1       # tre chiusure, un PDF: le altre aspettano un giro
+    r = p.run(date(2026, 11, 3), hour=15)
+    assert r.relevant == 2 and r.deferred == 0 and len(src.requests) == 2       # un altro PDF; la terza parte con la regione
+    assert sum(1 for i in range(3) if db.get_ordinanza(214100 + i).provinces == ["TA"]) == 2
+
+
+def test_atlas_is_seeded_once_from_the_archive(env):
+    """Le ordinanze già in archivio con provincia (lette dal PDF) riempiono l'atlante al primo giro, senza richieste."""
+    from anas_bot.anas.parser import Ordinanza
+    from anas_bot.atlante import Atlante
+    cfg, db, listing, src = env
+    o = Ordinanza(ord_id=5000, category="chiusura", roads=["SS268"], km_from="0+000", km_to="0+725",
+                  provinces=["NA"], regions=["campania"], pdf_url="u")
+    db.save_ordinanza(o, "", silent=True)
+    p = ListingPoller(db, listing, src, cfg)
+    _install(p, listing)
+    assert Atlante(db.b).lookup(["SS268"], "0+100", "0+500") == ["NA"]
+    assert db.get("atlante_seeded") == "1" and src.requests == []

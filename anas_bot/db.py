@@ -20,7 +20,7 @@ transazioni via API REST.
 from __future__ import annotations
 
 import json
-from datetime import date
+from datetime import date, timedelta
 import logging
 import sqlite3
 import threading
@@ -334,6 +334,29 @@ class Database:
             "OR json_extract(data, '$.end_date') >= ?)", (*categories, today.isoformat()))
         return [o for o in (ordinanza_from_json(r["data"]) for r in rows)
                 if not o.is_expired(today) and o.parser_version != UNREAD]  # le mai lette (solo viste) non si riepilogano
+
+    def all_ordinanze_with_provinces(self) -> list[Ordinanza]:
+        """Ordinanze in archivio con almeno una provincia (per riempire l'atlante): quelle lette dal PDF."""
+        rows = self.b.query("SELECT data FROM ordinanze WHERE json_extract(data, '$.provinces') NOT IN ('[]', '') "
+                            "AND json_extract(data, '$.provinces') IS NOT NULL")
+        return [ordinanza_from_json(r["data"]) for r in rows]
+
+    def housekeeping(self, today: date, text_days: int = 60, deliveries_days: int = 90) -> tuple[int, int]:
+        """Pulizia (una volta al giorno, di notte): svuota il testo dei PDF delle ordinanze scadute da più di
+        text_days (restano dati e classificazione) e cancella le consegne concluse più vecchie di deliveries_days.
+        Tiene il database (limite gratuito D1: 500 MB) stabile intorno a poche decine di MB."""
+        cutoff = (today - timedelta(days=text_days)).isoformat()
+        n_text = len(self.b.query(
+            "SELECT ord_id FROM ordinanze WHERE text != '' AND json_extract(data, '$.end_date') != '' "
+            "AND json_extract(data, '$.end_date') < ?", (cutoff,)))
+        if n_text:
+            self.b.query("UPDATE ordinanze SET text = '' WHERE text != '' AND json_extract(data, '$.end_date') != '' "
+                         "AND json_extract(data, '$.end_date') < ?", (cutoff,))
+        old = time.time() - deliveries_days * 86400
+        n_deliv = len(self.b.query("SELECT ord_id FROM deliveries WHERE status != 'pending' AND created_at < ?", (old,)))
+        if n_deliv:
+            self.b.query("DELETE FROM deliveries WHERE status != 'pending' AND created_at < ?", (old,))
+        return n_text, n_deliv
 
     def pending_ordinanze(self) -> list[Ordinanza]:
         rows = self.b.query("SELECT data FROM ordinanze WHERE notify_state=0 ORDER BY ord_id")

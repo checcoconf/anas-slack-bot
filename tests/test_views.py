@@ -46,7 +46,7 @@ def test_extension_is_flagged():
     o = parse_ordinanza(1, s.EXTENSION_BARI, "https://x")
     (msg, _), = views.notification_messages([o])
     assert "⏩ _chiusura prorogata_" in msg["blocks"][3]["text"]["text"]
-    assert "📍 Puglia  ❓ _provincia non determinata_" in msg["blocks"][3]["text"]["text"]
+    assert "📍 Puglia" in msg["blocks"][3]["text"]["text"] and "non determinata" not in msg["blocks"][3]["text"]["text"]
 
 
 def test_access_titles():

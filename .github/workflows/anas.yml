@@ -83,6 +83,7 @@ jobs:
           ANAS_ROUTE: ${{ vars.ANAS_ROUTE }}
           REQUEST_DELAY_SECONDS: ${{ vars.REQUEST_DELAY_SECONDS }}
           MAX_PDF_PER_RUN: ${{ vars.MAX_PDF_PER_RUN }}
+          MAX_PDF_PER_RUN_DAY: ${{ vars.MAX_PDF_PER_RUN_DAY }}
           MAX_REQUESTS_PER_HOUR: ${{ vars.MAX_REQUESTS_PER_HOUR }}
           CHANNEL_SUBSCRIPTIONS: ${{ vars.CHANNEL_SUBSCRIPTIONS }}
           BLOCK_PAUSE_MINUTES: ${{ vars.BLOCK_PAUSE_MINUTES }}

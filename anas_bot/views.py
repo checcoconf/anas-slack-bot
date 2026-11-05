@@ -234,7 +234,7 @@ def ordinanza_blocks(o: Ordinanza) -> list[dict]:
         lines.append("📍 " + ", ".join(
             f"{PROVINCE_BY_CODE[p].name} ({p})" for p in o.provinces if p in PROVINCE_BY_CODE))
     elif o.regions:
-        lines.append("📍 " + ", ".join(REGIONS.get(r, r) for r in o.regions) + "  ❓ _provincia non determinata_")
+        lines.append("📍 " + ", ".join(REGIONS.get(r, r) for r in o.regions))  # provincia non nota: solo la regione
     else:
         lines.append("📍 ❓ _zona non determinata_")
 

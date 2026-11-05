@@ -156,6 +156,15 @@ def run(cfg: Config, db: Database, client, source, listing=None, started: float 
     log.info("Fine giro: %d ordinanze nuove (%d utili), %d messaggi a %d utenti, cursore %s%s",
              fetched, relevant, sent, users, db.cursor(), f", errore ANAS: {error}" if error else "")
 
+    # Pulizia del database, una volta al giorno (di notte, quando il giro è tranquillo)
+    if cfg.is_deep_hour(local_now.hour) and db.get("housekeeping_day") != today.isoformat():
+        try:
+            n_text, n_deliv = db.housekeeping(today)
+            db.set("housekeeping_day", today.isoformat())
+            log.info("Pulizia: svuotato il testo di %d PDF scaduti, cancellate %d consegne vecchie", n_text, n_deliv)
+        except Exception as exc:  # noqa: BLE001 - la pulizia non deve mai fermare il giro
+            log.warning("Pulizia del database non riuscita: %s", exc)
+
     # Avvisi tecnici nel canale admin
     for chan, err in channel_errors.items():
         if db.get(f"channel_alerted:{chan}") != err:  # una volta per errore, non a ogni giro

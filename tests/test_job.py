@@ -154,7 +154,7 @@ def test_schema_statements_can_be_repeated():
     from anas_bot.db import LocalSqlite, schema_statements
     b = LocalSqlite(":memory:")
     stmts = schema_statements()
-    assert len(stmts) == 7
+    assert len(stmts) == 8
     b.batch([(st, ()) for st in stmts])   # seconda volta sulle tabelle già create: nessun errore
 
 
@@ -235,6 +235,7 @@ def test_end_to_end_day_and_night_with_every_kind_of_subscriber(tmp_path, cfg):
     db = Database.local(str(tmp_path / "e2e.sqlite3"))
     assert migrate(db.b) == [] and migrate(db.b) == []                # schema già completo: niente da fare
     cfg.channel_ids, cfg.channel_subscriptions = [], "CAUTO=autostrade"
+    cfg.max_pdf_per_run_day = 2  # due chiusure nel giro di giorno: entrambe con il loro PDF per la provincia
     slack = FakeSlack(members={})
     listing = FakeListing({"BA": [_closure(300, "20/10/2026")], "MI": [_closure(301, "20/10/2026", numero="5/2026/MI")]})
     src = FakeSource({})
@@ -268,7 +269,7 @@ def test_end_to_end_day_and_night_with_every_kind_of_subscriber(tmp_path, cfg):
         job.run(cfg, db, slack, src, listing, started=0.0)
     finally:
         J.datetime = real_now
-    assert src.requests == []                                          # di giorno nessun PDF
+    assert src.requests == [400, 402]                                  # di giorno PDF solo per la provincia delle chiusure
     by = lambda ch: [p["text"] for p in slack.posts if p["channel"] == ch]  # noqa: E731
     it, pug, lom, auto = by("D-U_IT"), by("D-U_PUG"), by("D-U_LOM"), by("CAUTO")
     # riepiloghi iniziali (zone appena scelte) prima delle novità
@@ -296,7 +297,7 @@ def test_end_to_end_day_and_night_with_every_kind_of_subscriber(tmp_path, cfg):
         job.run(cfg, db, slack, src, listing, started=0.0)              # un altro giro: niente di nuovo
     finally:
         J.datetime = real_now
-    assert src.requests == [403]
+    assert src.requests == [400, 402, 403]
     new_posts = slack.posts[n_before:]
     assert any(p["channel"] == "D-U_IT" and "SS172" in p["text"] for p in new_posts)   # la proroga, letta dal PDF
     assert not any(p["channel"] in ("D-U_LOM", "CAUTO") for p in new_posts)            # non è della loro zona
@@ -350,3 +351,24 @@ def test_migration_never_stops_the_job():
                 return [{"name": "user_id"}]
             return []
     assert migrate(Fresh()) == ["users.want_all", "users.all_regions", "users.all_provinces"]  # colonne mancanti: aggiunte
+
+
+def test_housekeeping_frees_old_pdf_text_and_old_deliveries():
+    from datetime import date as _d
+    from anas_bot.anas.parser import Ordinanza
+    db = Database.local(":memory:")
+    old = Ordinanza(ord_id=1, category="chiusura", roads=["SS1"], start_date="2026-01-01", end_date="2026-02-01", pdf_url="u")
+    live = Ordinanza(ord_id=2, category="chiusura", roads=["SS2"], start_date="2026-11-01", end_date="2026-12-01", pdf_url="u")
+    forever = Ordinanza(ord_id=3, category="chiusura", roads=["SS3"], start_date="2026-01-01", end_date="", open_ended=True, pdf_url="u")
+    for o in (old, live, forever):
+        db.save_ordinanza(o, "testo del pdf " * 100)
+    db.ensure_user("U")
+    db.record_deliveries("U", [1], "sent")
+    db.b.query("UPDATE deliveries SET created_at = created_at - 100*86400")   # consegna di 100 giorni fa
+    db.record_deliveries("U", [2], "sent")
+    n_text, n_deliv = db.housekeeping(_d(2026, 11, 5))
+    assert (n_text, n_deliv) == (1, 1)
+    rows = {r["ord_id"]: r["text"] for r in db.b.query("SELECT ord_id, text FROM ordinanze")}
+    assert rows[1] == "" and rows[2] and rows[3]                              # solo la scaduta da >60 giorni
+    assert db.get_ordinanza(1).roads == ["SS1"]                               # i dati restano
+    assert db.delivered_ids("U") == {2}

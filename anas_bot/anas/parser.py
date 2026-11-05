@@ -222,6 +222,7 @@ class Ordinanza:
     provinces: list[str] = field(default_factory=list)
     regions: list[str] = field(default_factory=list)
     province_inferred: bool = True  # False se le regioni vengono solo dalla Struttura Territoriale
+    province_guessed: bool = False  # True se la provincia è una stima del modello locale (non letta dal PDF)
     start_date: str = ""  # ISO yyyy-mm-dd
     end_date: str = ""  # ISO, vuoto se "fino a nuova disposizione"
     open_ended: bool = False
