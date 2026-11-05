@@ -43,6 +43,23 @@ SUBPROCESS_TIMEOUT = 180  # secondi per un parere (caricamento del modello compr
 class ModelCrashed(Exception):
     """Il processo del modello è uscito male (crollo del codice nativo, libreria mancante...)."""
 
+
+_SIGNAL_HINTS = {4: "istruzione non supportata dalla CPU: ruota di llama.cpp non portabile",
+                 9: "ucciso, probabilmente memoria finita", 11: "accesso a memoria non valido"}
+
+
+def _signal_hint(returncode: int) -> str:
+    """-4 -> " (SIGILL, istruzione non supportata...)": un codice negativo è il segnale che ha ucciso il processo."""
+    if returncode >= 0:
+        return ""
+    import signal
+    try:
+        name = signal.Signals(-returncode).name
+    except ValueError:
+        name = f"segnale {-returncode}"
+    hint = _SIGNAL_HINTS.get(-returncode)
+    return f" ({name}, {hint})" if hint else f" ({name})"
+
 SYSTEM = (
     "Sei un assistente che legge ordinanze stradali di ANAS per gli editor della mappa Waze. "
     "Rispondi solo nel formato richiesto, in italiano, senza aggiungere altro."
@@ -126,7 +143,7 @@ class LocalModel:
                            timeout=SUBPROCESS_TIMEOUT)
         if p.returncode != 0:
             tail = (p.stderr or "").strip().splitlines()[-1:] or ["nessun dettaglio"]
-            raise ModelCrashed(f"uscita {p.returncode}: {tail[0][:200]}")
+            raise ModelCrashed(f"uscita {p.returncode}{_signal_hint(p.returncode)}: {tail[0][:200]}")
         return p.stdout
 
     def ask(self, prompt: str) -> str | None:

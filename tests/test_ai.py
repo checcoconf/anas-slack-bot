@@ -207,3 +207,9 @@ def test_model_subprocess_protocol(monkeypatch):
         return subprocess.CompletedProcess(args, -4, stdout="", stderr="Illegal instruction (core dumped)")
     monkeypatch.setattr(subprocess, "run", fake_crash)
     assert m.closure_verdict("testo") is None and m.disabled
+
+
+def test_crash_message_names_the_signal():
+    from anas_bot.ai import _signal_hint
+    assert "SIGILL" in _signal_hint(-4) and "CPU" in _signal_hint(-4)
+    assert _signal_hint(1) == ""
