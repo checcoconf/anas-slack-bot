@@ -304,6 +304,26 @@ def test_end_to_end_day_and_night_with_every_kind_of_subscriber(tmp_path, cfg):
     assert len(texts) == len(set(texts))                                # nessun messaggio identico ripetuto
 
 
+def test_digest_job_sends_only_the_digest(cfg, monkeypatch):
+    """Il mini-job avviato dal Worker: nessuna richiesta ad ANAS, solo il riepilogo a chi ha zone nuove."""
+    from anas_bot import digest_job as DJ
+    from tests.test_listing import _closure, FakeListing
+    db = Database.local(":memory:")
+    slack = FakeSlack(members={})
+    listing = FakeListing({"BA": [_closure(300, "20/10/2026")], "MI": []})
+    for _ in range(2):
+        job.run(cfg, db, slack, FakeSource({}), listing, started=0.0)   # installazione: la SS16 è "in vigore"
+    db.save_preferences("U1", all_italy=True, regions=[], provinces=[], want_closures=True, want_speed=True)
+    slack.posts.clear()
+    monkeypatch.setattr(DJ, "open_database", lambda c: db)
+    monkeypatch.setattr(DJ, "build_web_client", lambda token: slack)
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
+    monkeypatch.setenv("LOCAL_DB_PATH", ":memory:")
+    assert DJ.main() == 0
+    assert len(slack.posts_to("U1")) == 1 and "in vigore" in slack.posts_to("U1")[0]["text"]
+    assert DJ.main() == 0 and len(slack.posts_to("U1")) == 1              # seconda volta: niente doppioni
+
+
 def test_migration_never_stops_the_job():
     """Database senza PRAGMA (o con la colonna già presente): la migrazione non solleva mai."""
     from anas_bot.db import migrate

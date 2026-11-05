@@ -78,11 +78,16 @@ async function handleBlockAction(env, payload) {
   // open_pdf_*: il pulsante apre già il PDF nel browser, a Slack basta il 200
 }
 
+// Mini-job su GitHub che manda solo il riepilogo delle ordinanze in vigore (nessuna richiesta ad ANAS,
+// fuori dalla coda del giro orario): parte appena l'utente salva le zone, arriva in 1-2 minuti.
+export const DIGEST_WORKFLOW = "riepilogo.yml";
+
 async function afterSave(env, userId) {
   await publishHome(env, userId);
   const user = await getUser(env.DB, userId);
   await sendDm(env, userId, savedMessage(user));
   if (!user.welcomedAt) await markWelcomed(env.DB, userId);
+  await dispatchWorkflow(env, undefined, DIGEST_WORKFLOW);
 }
 
 // --- Comando /anas (con sottocomandi) ---------------------------------------
@@ -124,8 +129,8 @@ async function handleCommand(env, ctx, form) {
 
 // Un avvio mancato è un'ora senza letture: se GitHub non risponde (rete o 5xx) si riprova una volta
 // dopo una breve attesa. Gli errori 4xx (token, repo, ref sbagliati) non si riprovano: non cambiano da soli.
-export async function dispatchWorkflow(env, sleep = (ms) => new Promise((r) => setTimeout(r, ms))) {
-  const url = `https://api.github.com/repos/${env.GITHUB_REPO}/actions/workflows/${env.GITHUB_WORKFLOW}/dispatches`;
+export async function dispatchWorkflow(env, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), workflow = env.GITHUB_WORKFLOW) {
+  const url = `https://api.github.com/repos/${env.GITHUB_REPO}/actions/workflows/${workflow}/dispatches`;
   let status = 0;
   for (let attempt = 1; attempt <= 2; attempt++) {
     try {

@@ -1,5 +1,5 @@
 # Test automatici a ogni modifica: parte Python (job) e parte JavaScript (Worker).
-name: Test
+name: Test automatici
 
 on:
   push:
@@ -9,7 +9,8 @@ permissions:
   contents: read
 
 jobs:
-  python:
+  test-job-python:
+    name: Test del job Python (lettura ANAS, classificazione, Slack)
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
@@ -20,7 +21,8 @@ jobs:
       - run: pip install -r requirements.txt pytest
       - run: python -m pytest -q
 
-  worker:
+  test-worker:
+    name: Test del Worker (modulo Slack, ponte ANAS)
     runs-on: ubuntu-24.04
     defaults:
       run:

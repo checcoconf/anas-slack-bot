@@ -104,7 +104,7 @@ Scheda **Variables** (*New repository variable*):
 1. Nella repo vuota clicca **uploading an existing file**.
 2. Apri la cartella del progetto, seleziona **tutto il contenuto** (compresa `.github`, non la cartella esterna) e trascinalo nella pagina. *Commit changes*.
 3. Controlla che nella repo ci siano `.github`, `anas_bot`, `worker`, `tests`, `collaudo`.
-4. *Actions*: partono da soli **Test** e **Pubblica Worker**, ed entrambi devono diventare verdi ✅ (2-3 minuti). Se *Pubblica Worker* non parte da solo: *Actions → Pubblica Worker → Run workflow*.
+4. *Actions*: partono da soli **Test automatici** e **Pubblica Worker (Cloudflare)**, ed entrambi devono diventare verdi ✅ (2-3 minuti). Se *Pubblica Worker (Cloudflare)* non parte da solo: *Actions → Pubblica Worker (Cloudflare) → Run workflow*.
    Se diventa rosso, il passaggio *Controllo dei Secrets e delle Variables* dice quale valore manca.
 
 ### 8. Collega Slack
@@ -113,7 +113,7 @@ Scheda **Variables** (*New repository variable*):
 3. Su Slack scrivi `/anas` e scegli le zone (per la prima prova: 🇮🇹 Tutta Italia).
 
 ### 9. Primo giro
-1. *Actions → ANAS ordinanze → Run workflow* (oppure aspetta: il Worker lo avvia da solo una volta l'ora).
+1. *Actions → Giro ANAS (ogni ora) → Run workflow* (oppure aspetta: il Worker lo avvia da solo una volta l'ora).
 2. Nel log devono comparire `Elenco ufficiale: 23 strutture, …` e `Fine giro: …`. Nel canale tecnico arriva 🤖 *Bot attivo*.
 3. Esci e rientra nel canale: deve arrivarti il benvenuto 👋.
 
@@ -121,15 +121,15 @@ Scheda **Variables** (*New repository variable*):
 
 ### Dal canale di test a quello vero
 
-- **Stesso workspace:** cambia la variable `SLACK_CHANNEL_IDS` con l'ID del canale vero, invita il bot nel canale e rilancia *Actions → Pubblica Worker*.
-- **Workspace diverso** (per esempio il tuo di prova → Waze Italia): crea l'app anche lì dallo stesso manifest, poi aggiorna `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET` e `SLACK_CHANNEL_IDS` e rilancia *Pubblica Worker*. Gli iscritti del canale di test non vengono trasferiti.
+- **Stesso workspace:** cambia la variable `SLACK_CHANNEL_IDS` con l'ID del canale vero, invita il bot nel canale e rilancia *Actions → Pubblica Worker (Cloudflare)*.
+- **Workspace diverso** (per esempio il tuo di prova → Waze Italia): crea l'app anche lì dallo stesso manifest, poi aggiorna `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET` e `SLACK_CHANNEL_IDS` e rilancia *Pubblica Worker (Cloudflare)*. Gli iscritti del canale di test non vengono trasferiti.
 
 ## Per gli utenti
 
 Gli utenti non installano nulla:
 1. entrano nel canale e ricevono il benvenuto con il pulsante 🗺️ **Scegli le zone**;
 2. scelgono le zone e i tipi di avviso dai menu: chiusure e aperture, limiti permanenti e, per chi vuole proprio tutto, **anche cantieri e restringimenti** (tutte le altre ordinanze; di default delle stesse zone, oppure di zone proprie scelte nel modulo: per esempio chiusure di tutta Italia ma cantieri solo della propria provincia, titolo "🚧 LAVORI E LIMITAZIONI"; spenta di default, con Tutta Italia sono decine al giorno);
-3. ricevono subito un **riepilogo delle ordinanze già in vigore** nelle zone scelte (le 30 più recenti; arriva al primo giro del job, entro un'ora) e da quel momento solo le novità, in privato. Cambiando zone arriva il riepilogo delle zone nuove, senza ripetere ciò che hanno già avuto.
+3. ricevono subito un **riepilogo delle ordinanze già in vigore** nelle zone scelte (le 30 più recenti; lo manda un mini-job dedicato, "Riepilogo per chi sceglie le zone", avviato dal Worker al salvataggio: 1-2 minuti) e da quel momento solo le novità, in privato. Cambiando zone arriva il riepilogo delle zone nuove, senza ripetere ciò che hanno già avuto.
 
 Possono cambiare le zone o mettere in pausa dalla scheda **Home** dell'app o con i comandi `/anas` (`/anas stato`, `/anas pausa`, `/anas riprendi`, `/anas aiuto`). Se escono dal canale gli avvisi si fermano, ma le preferenze restano salvate.
 

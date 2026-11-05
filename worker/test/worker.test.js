@@ -148,6 +148,10 @@ test("modulo: salvataggio, scheda Home e conferma", async () => {
   const home = slackCalls("views.publish")[0].body.view;
   assert.match(JSON.stringify(home), /Avvisi attivi/);
   assert.match(slackCalls("chat.postMessage")[0].body.blocks[0].text.text, /Cuneo \(CN\)/);
+  await settle();
+  const dispatched = calls.filter((c) => c.url.includes("/actions/workflows/"));
+  assert.equal(dispatched.length, 1);                                    // parte il mini-job del riepilogo
+  assert.match(dispatched[0].url, /riepilogo\.yml\/dispatches$/);
 });
 
 const command = (text, user = "U1") =>

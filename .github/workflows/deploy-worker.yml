@@ -1,7 +1,7 @@
 # Pubblica il Cloudflare Worker e prepara il database D1, tutto da GitHub: sul tuo PC non serve nulla.
 # Parte da solo quando cambia il codice del Worker, oppure a mano: Actions -> "Pubblica Worker" -> Run workflow.
 # Usa gli stessi Secrets e Variables del bot (vedi README, sezione Installazione).
-name: Pubblica Worker
+name: Pubblica Worker (Cloudflare)
 
 on:
   workflow_dispatch:
@@ -20,7 +20,8 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  deploy:
+  pubblica-worker:
+    name: Test, database e pubblicazione su Cloudflare
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     defaults:

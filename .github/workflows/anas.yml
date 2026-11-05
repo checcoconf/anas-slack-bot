@@ -1,7 +1,7 @@
 # Il lavoro periodico: scarica le ordinanze ANAS nuove, le classifica e manda i messaggi privati.
 # Lo avvia il Cloudflare Worker una volta l'ora (workflow_dispatch); ogni giro dura quasi un'ora. La pianificazione qui sotto
 # è solo una riserva: GitHub la sospende dopo 60 giorni senza commit sulle repo pubbliche.
-name: ANAS ordinanze
+name: Giro ANAS (ogni ora)
 
 on:
   workflow_dispatch:
@@ -17,7 +17,8 @@ permissions:
   contents: read
 
 jobs:
-  run:
+  giro-anas:
+    name: Legge Ordinanze Web e avvisa gli iscritti
     runs-on: ubuntu-24.04
     timeout-minutes: 75  # il giro dura ~50 minuti (JOB_TIME_BUDGET_MINUTES) più l'attesa del budget orario (max 15) e l'ultima richiesta
     steps:
