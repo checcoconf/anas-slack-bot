@@ -129,6 +129,10 @@ class AnasClient:
             raise TransientError(f"HTTP {r.status_code}, Retry-After={retry_after or '?'}")
         if r.status_code >= 500:
             raise TransientError(f"HTTP {r.status_code}")
+        if r.status_code == 401 and "Firma non valida" in (r.text or ""):
+            # risposta del NOSTRO Worker, non di ANAS: job e Worker hanno token Slack diversi
+            raise TransientError("HTTP 401: il ponte del Worker ha rifiutato la firma del job (token diversi: "
+                                 "ripubblica il Worker); ANAS non è stata contattata")
         if r.status_code in (401, 403):
             raise TransientError(f"HTTP {r.status_code}: accesso negato (blocco anti-bot?)")
         if r.status_code == 404:

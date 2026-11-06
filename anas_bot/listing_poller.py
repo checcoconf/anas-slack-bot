@@ -57,7 +57,7 @@ from .anas.vocabolario import unknown_measures
 from .atlante import Atlante
 from .config import Config
 from .db import RELEVANT, UNREAD, Database
-from .geo import PROVINCE_BY_CODE, REGIONS, find_provinces, norm
+from .geo import PROVINCE_BY_CODE, find_provinces, norm
 from .poller import BLOCKED_UNTIL  # chiave in D1: time.time() fino a cui non si interroga ANAS
 
 log = logging.getLogger(__name__)
@@ -125,11 +125,10 @@ class ListingPoller:
         self._day_pdf_tried = True  # provato davvero: se non dà la provincia, aspettare non serve
         return self.source.fetch_text(ord_id)
 
-    def _enrich_with_pdf_or_atlas(self, o: Ordinanza, text: str, fetch, ai_first: bool = False) -> str:
-        """Provincia di una chiusura/limite, dal mezzo più economico al più costoso:
-        atlante (gratis, certo) -> [di giorno: stima del modello locale, gratis, solo se "alta"] -> PDF
-        (una richiesta; istruisce l'atlante) -> [di notte: stima del modello] -> regione.
-        Di notte il PDF viene prima della stima: le richieste ci sono e la lettura è certa.
+    def _enrich_with_pdf_or_atlas(self, o: Ordinanza, text: str, fetch) -> str:
+        """Provincia di una chiusura/limite: atlante (gratis, certo) -> PDF (una richiesta; istruisce
+        l'atlante) -> regione. Il modello locale NON stima le province: inventa con "certezza alta"
+        (06/11/2026: SS 130 in Sardegna -> "BA, Basti"; RA2 a Solofra -> NA e SA invece di AV).
         Restituisce il testo del PDF se letto."""
         learned = self.atlante.lookup(o.roads, o.km_from, o.km_to) if not o.provinces else []
         if learned:
@@ -137,41 +136,13 @@ class ListingPoller:
             o.regions = sorted({PROVINCE_BY_CODE[p].region for p in learned})
             o.province_inferred = True
             return text
-        if ai_first and self._guess_province(o):
-            return text  # il modello è sicuro: la richiesta del PDF resta per chi ne ha bisogno
         if not text:
             text = fetch(o.ord_id) or ""
         if text:
             self._enrich_provinces(o, text)
             if o.provinces:
                 self.atlante.learn(o.roads, o.km_from, o.km_to, o.provinces, o.ord_id)
-        if not o.provinces and not ai_first:
-            self._guess_province(o)
         return text
-
-    def _guess_province(self, o: Ordinanza) -> bool:
-        """Provincia stimata dal modello locale da strada, chilometri, regione e direzione. Si accetta solo
-        con certezza "alta" e province dentro la regione della struttura; nel messaggio è segnata "stimata".
-        Non entra nell'atlante: lì vanno solo le province lette da un PDF, che poi confermano o correggono."""
-        if self.ai is None or not o.roads:
-            return False
-        road = ", ".join(f"{r} {o.road_names[r]}" if r in o.road_names else r for r in o.roads[:2])
-        km = f"dal km {o.km_from} al km {o.km_to}" if o.km_from and o.km_to else (f"km {o.km_from}" if o.km_from else "")
-        region = ", ".join(REGIONS.get(r, r) for r in o.regions)
-        guess = self.ai.province_guess(road, km, region, o.direction)
-        if guess is None:
-            return False
-        codes, certainty, reason = guess
-        ok = [c for c in codes if c in PROVINCE_BY_CODE and (not o.regions or PROVINCE_BY_CODE[c].region in o.regions)]
-        log.info("Modello locale, provincia di %s (%s, %s): %s, certezza %s — %s", o.number or o.ord_id, road, km,
-                 ", ".join(codes) or "?", certainty, reason)
-        if certainty == "alta" and ok and len(ok) == len(codes):
-            o.provinces = ok
-            o.regions = sorted({PROVINCE_BY_CODE[p].region for p in ok})
-            o.province_inferred = True
-            o.province_guessed = True
-            return True
-        return False
 
     # --- strutture, riscoperte una volta a settimana ----------------------------
     def structures(self, today: date) -> list[Structure]:
@@ -253,12 +224,12 @@ class ListingPoller:
                     return  # tetto dei PDF esaurito: la rimandiamo intera al giro dopo
                 text = self._enrich_with_pdf_or_atlas(o, text, self._fetch_text)
             elif o.category in RELEVANT and not o.provinces and not text:
-                # di giorno: atlante -> stima del modello -> un PDF per giro (poi impara). Se il PDF del giro è
+                # di giorno: atlante -> un PDF per giro (poi impara). Se il PDF del giro è
                 # già speso e nessuno sa la provincia, l'ordinanza aspetta il giro dopo (PDF nuovo), al massimo
                 # MAX_PROVINCE_WAIT giri; poi parte con la sola regione, a tutti gli iscritti delle sue province
                 # (in una raffica di chiusure, meglio un'ora di attesa che la precisione: non di più).
                 self._day_pdf_tried = False
-                text = self._enrich_with_pdf_or_atlas(o, text, self._fetch_text_day, ai_first=True)
+                text = self._enrich_with_pdf_or_atlas(o, text, self._fetch_text_day)
                 if not o.provinces and not self._day_pdf_tried and o.roads and self.cfg.max_pdf_per_run_day > 0:
                     key = f"province_wait_{ord_id}"
                     waited = int(self.db.get(key, "0") or 0)
@@ -270,14 +241,14 @@ class ListingPoller:
             elif o.category not in RELEVANT and not o.provinces and not text \
                     and set(o.regions) & self._province_regions:
                 # "altra" ordinanza senza provincia nel testo, in una regione dove qualcuno segue le "altre"
-                # per provincia: atlante -> stima del modello -> PDF di notte; fino ad allora resta in sospeso
+                # per provincia: atlante -> PDF di notte; fino ad allora resta in sospeso
                 # (non si consegna "nel dubbio" a tutta la regione)
                 learned = self.atlante.lookup(o.roads, o.km_from, o.km_to)
                 if learned:
                     o.provinces = learned
                     o.regions = sorted({PROVINCE_BY_CODE[p].region for p in learned})
                     o.province_inferred = True
-                elif not self._guess_province(o):
+                else:
                     if not self.deep or self.pdf_budget <= 0:
                         res.deferred += 1
                         return

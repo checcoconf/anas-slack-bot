@@ -85,21 +85,6 @@ Questa voce può indicare che un tratto di strada viene chiuso a tutte le automo
 CHIUSURA: si | no
 MOTIVO: una frase breve"""
 
-PROVINCE_PROMPT = """Tratto di strada statale italiana gestita da ANAS:
-- strada: {road}
-- chilometri: {km}
-- regione: {region}
-- direzione indicata: {direction}
-In quale provincia (o province) italiana si trova questo tratto? Usa la tua conoscenza della geografia
-stradale italiana. Se non sei sicuro, dichiaralo: una provincia sbagliata è peggio di nessuna.
-Rispondi con tre righe nel formato:
-PROVINCE: sigle separate da virgola (es. NA oppure NA, SA)
-CERTEZZA: alta | media | bassa
-MOTIVO: una frase breve"""
-
-_PROVS = re.compile(r"province\s*:\s*([A-Za-z ,]+)", re.I)
-_CERT = re.compile(r"certezza\s*:\s*(alta|media|bassa)", re.I)
-
 _VERDICT = re.compile(r"verdetto\s*:\s*(chiusura_totale|accesso_chiuso|non_chiusura)", re.I)
 _CLOSES = re.compile(r"chiusura\s*:\s*(si|sì|no)\b", re.I)
 _REASON = re.compile(r"motivo\s*:\s*(.+)", re.I)
@@ -188,21 +173,6 @@ class LocalModel:
             return None
         reason = _REASON.search(out)
         return m.group(1).lower(), (reason.group(1).strip() if reason else "")[:200]
-
-    def province_guess(self, road: str, km: str, region: str, direction: str) -> tuple[list[str], str, str] | None:
-        """([sigle], certezza, motivo) oppure None se non risponde nel formato. Chi chiama decide se fidarsi
-        (solo con certezza "alta" e province dentro la regione)."""
-        out = self.ask(PROVINCE_PROMPT.format(road=road or "?", km=km or "non indicati", region=region or "?",
-                                              direction=direction or "non indicata"))
-        if not out:
-            return None
-        provs, cert = _PROVS.search(out), _CERT.search(out)
-        if not provs or not cert:
-            log.info("Modello locale: risposta fuori formato, ignorata: %r", out[:120])
-            return None
-        codes = sorted({c.strip().upper() for c in provs.group(1).split(",") if 1 < len(c.strip()) <= 2})
-        reason = _REASON.search(out)
-        return codes, cert.group(1).lower(), (reason.group(1).strip() if reason else "")[:200]
 
     def measure_closes(self, measure: str, text: str) -> tuple[bool, str] | None:
         """(True se la voce può indicare una chiusura, motivo) oppure None se non risponde nel formato."""

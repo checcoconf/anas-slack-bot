@@ -96,57 +96,36 @@ def test_model_failures_never_break_the_run(env):
     assert LocalModel.from_env("off", "x.gguf") is None and LocalModel.from_env("flag", "/non/esiste.gguf") is None
 
 
-def test_model_estimates_the_province_by_day_and_saves_the_pdf_request(env):
-    """Di giorno: atlante vuoto -> il modello stima la provincia (certezza alta, dentro la regione) -> niente PDF.
-    Con certezza media si legge il PDF. Una sigla fuori regione non si accetta."""
+def test_model_is_never_asked_for_provinces(env):
+    """Il modello inventa le province (06/11/2026: SS 130 -> "BA, Basti"): di giorno la provincia di una chiusura
+    viene dal PDF; le "altre" seguite per provincia aspettano il PDF della notte. Il modello vede solo i verdetti."""
     cfg, db, listing, src = env
     cfg.max_pdf_per_run_day = 1
     p = ListingPoller(db, listing, src, cfg)
     _install(p, listing)
-    answers = {
-        "strada: SS268": "PROVINCE: NA\nCERTEZZA: alta\nMOTIVO: il raccordo del Vesuvio è interamente in provincia di Napoli",
-        "strada: SS16": "PROVINCE: BA, BT\nCERTEZZA: media\nMOTIVO: la SS 16 attraversa più province",
-        "strada: SS999": "PROVINCE: MI\nCERTEZZA: alta\nMOTIVO: sbagliato di proposito",
-        "VERDETTO": "VERDETTO: chiusura_totale\nMOTIVO: ok",
-    }
-    p.ai = LocalModel("x.gguf", generate=_fake(answers))
-    src.docs.update({214200: "ALLA PREFETTURA DI BARI\nchiusura", 214201: "ALLA PREFETTURA DI FOGGIA\nchiusura"})
-    listing.pages["BA"].insert(0, _rec(214200, _riep("SS 268 DEL VESUVIO", "su <strong>tutte le corsie</strong>,", ["chiusura al traffico"],
-                                                     "a partire dal <strong>03/11/2026</strong>")))
-    p.run(date(2026, 11, 3), hour=14)
-    o = db.get_ordinanza(214200)
-    # la struttura è Bari (Puglia): NA è fuori regione -> stima rifiutata -> PDF -> Bari
-    assert o.provinces == ["BA"] and not o.province_guessed and src.requests == [214200]
-    listing.pages["BA"].insert(0, _closure(214201, "03/11/2026"))               # SS 16: certezza media -> PDF
-    p.run(date(2026, 11, 3), hour=14)
-    assert db.get_ordinanza(214201).provinces == ["FG"] and src.requests == [214200, 214201]
-    listing.pages["MI"].insert(0, _rec(214202, _riep("SS 999 DI PROVA", "su <strong>tutte le corsie</strong>,", ["chiusura al traffico"],
-                                                     "a partire dal <strong>03/11/2026</strong>"), numero="9/2026/MI"))
-    p.run(date(2026, 11, 3), hour=14)
-    o3 = db.get_ordinanza(214202)
-    assert o3.provinces == ["MI"] and o3.province_guessed and src.requests == [214200, 214201]   # stima accettata, niente PDF
+    asked = []
 
+    def gen(prompt):
+        asked.append(prompt)
+        return "VERDETTO: chiusura_totale\nMOTIVO: ok"
+    p.ai = LocalModel("x.gguf", generate=gen)
+    src.docs[214200] = "ALLA PREFETTURA DI BARI\nchiusura"
+    listing.pages["BA"].insert(0, _rec(214200, _riep("SS 268 DEL VESUVIO", "su <strong>tutte le corsie</strong>,",
+                                                     ["chiusura al traffico"], "a partire dal <strong>03/11/2026</strong>")))
+    p.run(date(2026, 11, 3), hour=14)
+    assert db.get_ordinanza(214200).provinces == ["BA"] and src.requests == [214200]
+    assert asked and all("VERDETTO" in a for a in asked)
 
-def test_other_ordinances_for_province_followers_use_atlas_and_model_before_the_night_pdf(env):
-    """"Altre ordinanze" seguite per provincia: se il modello è sicuro, partono di giorno senza aspettare il PDF."""
-    cfg, db, listing, src = env
-    p = ListingPoller(db, listing, src, cfg)
-    _install(p, listing)
     db.ensure_user("U_TA")
     db.save_preferences("U_TA", all_italy=True, regions=[], provinces=[], want_closures=True, want_speed=True,
                         want_all=True, all_provinces=["TA"])
-    p.ai = LocalModel("x.gguf", generate=_fake({
-        "strada: SS7": "PROVINCE: TA\nCERTEZZA: alta\nMOTIVO: la SS 7 Appia nel tratto finale è in provincia di Taranto",
-        "strada: SS16": "PROVINCE: BA, BT\nCERTEZZA: bassa\nMOTIVO: attraversa più province",
-    }))
-    works = lambda i, road: _rec(i, _riep(road, "su <strong>corsia di marcia</strong>,", ["restringimento carreggiata"],  # noqa: E731
-                                          "a partire dal <strong>03/11/2026</strong> fino al <strong>30/11/2026</strong>"))
-    listing.pages["BA"].insert(0, works(214300, "SS 7 APPIA"))
-    listing.pages["BA"].insert(0, works(214301, "SS 16 ADRIATICA"))
+    p = ListingPoller(db, listing, src, cfg)
+    p.ai = LocalModel("x.gguf", generate=gen)
+    listing.pages["BA"].insert(0, _rec(214300, _riep("SS 7 APPIA", "su <strong>corsia di marcia</strong>,",
+                                                     ["restringimento carreggiata"],
+                                                     "a partire dal <strong>03/11/2026</strong> fino al <strong>30/11/2026</strong>")))
     r = p.run(date(2026, 11, 3), hour=14)
-    assert r.new == 1 and r.deferred == 1 and src.requests == []            # SS 7: stimata TA, parte; SS 16: aspetta la notte
-    assert db.get_ordinanza(214300).provinces == ["TA"] and db.get_ordinanza(214301) is None
-
+    assert r.deferred == 1 and db.get_ordinanza(214300) is None and src.requests == [214200]  # aspetta la notte
 
 def test_model_calls_are_capped_per_run():
     from anas_bot import ai as AI
