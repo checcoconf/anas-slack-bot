@@ -372,3 +372,29 @@ def test_housekeeping_frees_old_pdf_text_and_old_deliveries():
     assert rows[1] == "" and rows[2] and rows[3]                              # solo la scaduta da >60 giorni
     assert db.get_ordinanza(1).roads == ["SS1"]                               # i dati restano
     assert db.delivered_ids("U") == {2}
+
+
+def test_worker_signature_rejected_is_not_a_format_change_and_recovery_is_announced(tmp_path, cfg):
+    """401 "Firma non valida" dal ponte (segreti cambiati, Worker non ripubblicato): avviso chiaro subito,
+    e "di nuovo leggibile" al primo giro buono, anche se è fallito un giro solo."""
+    from anas_bot.anas.listing import RelayRejected
+    from tests.test_listing import FakeListing
+    db = Database.local(str(tmp_path / "r.sqlite3"))
+    slack = FakeSlack(members={"C1": []})
+    listing = FakeListing({"BA": [], "MI": []})
+    src = FakeSource({})
+    job.run(cfg, db, slack, src, listing)
+    good = listing.search_page
+
+    def rejected(*a, **k):
+        raise RelayRejected("il ponte del Worker ha rifiutato la firma del job (HTTP 401): ripubblica il Worker")
+    listing.search_page = rejected
+    slack.posts.clear()
+    job.run(cfg, db, slack, src, listing)
+    alerts = [p["text"] for p in slack.posts if p["channel"] == "CADMIN"]
+    assert any("Ripubblica il Worker".lower() in a.lower() for a in alerts)
+    assert not any("non leggibile" in a for a in alerts)
+    listing.search_page = good
+    slack.posts.clear()
+    job.run(cfg, db, slack, src, listing)
+    assert any("di nuovo leggibile" in p["text"] for p in slack.posts if p["channel"] == "CADMIN")

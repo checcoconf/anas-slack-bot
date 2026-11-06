@@ -41,7 +41,7 @@ from .poller import PdfSource, Poller
 
 log = logging.getLogger("anas_bot")
 
-ALERT_AFTER_FAILED_RUNS = 12  # con un giro ogni 15 minuti: ~3 ore di ANAS irraggiungibile
+ALERT_AFTER_FAILED_RUNS = 3  # con un giro l'ora: ~3 ore di ANAS irraggiungibile
 
 
 def open_database(cfg: Config) -> Database:
@@ -204,11 +204,17 @@ def _listing_alerts(db: Database, client, cfg: Config, lres) -> None:
     if lres.error:
         lfailed += 1
         if lfailed == ALERT_AFTER_FAILED_RUNS or (lres.broken and lfailed == 1):
-            admin(client, cfg, f"⚠️ Elenco ufficiale di Ordinanze Web non leggibile: {lres.error}. "
-                               "Intanto il bot usa il canale di riserva a numeri.")
+            if lres.relay_rejected:
+                admin(client, cfg, f"⚠️ Elenco non letto: {lres.error}.")
+            else:
+                admin(client, cfg, f"⚠️ Elenco ufficiale di Ordinanze Web non leggibile: {lres.error}. "
+                                   "Intanto il bot usa il canale di riserva a numeri.")
+            db.set("listing_alerted", "1")
     else:
-        if lfailed >= ALERT_AFTER_FAILED_RUNS:
+        # il "tutto a posto" arriva sempre dopo un avviso, anche quello immediato del primo giro fallito
+        if db.get("listing_alerted") == "1" or lfailed >= ALERT_AFTER_FAILED_RUNS:
             admin(client, cfg, "✅ Elenco ufficiale di nuovo leggibile.")
+            db.set("listing_alerted", "0")
         lfailed = 0
     db.set("listing_failed_runs", str(lfailed))
 

@@ -44,6 +44,7 @@ from .anas.client import BlockedError, TransientError
 from .anas.listing import (
     ListingClient,
     ListingError,
+    RelayRejected,
     Structure,
     _plain,
     clean_excerpt,
@@ -86,6 +87,7 @@ class ListingResult:
     skipped: list[str] = field(default_factory=list)  # strutture saltate per un errore di rete
     error: str = ""
     broken: bool = False  # il formato dell'elenco è cambiato
+    relay_rejected: bool = False  # il Worker ha rifiutato la firma: segreti non allineati, non ANAS
     blocked: bool = False  # il firewall ci ha bloccati (o siamo ancora in pausa dopo un blocco)
     block_started: bool = False  # il blocco è scattato in questo giro (per l'avviso in admin)
 
@@ -401,6 +403,9 @@ class ListingPoller:
         except TransientError as exc:
             res.error = str(exc)
             log.warning("Elenco ANAS non raggiungibile, riprovo al prossimo giro: %s", exc)
+        except RelayRejected as exc:
+            res.error, res.broken, res.relay_rejected = str(exc), True, True
+            log.error("Elenco: %s", exc)
         except ListingError as exc:
             res.error, res.broken = str(exc), True
             log.error("Elenco ANAS non leggibile: %s", exc)

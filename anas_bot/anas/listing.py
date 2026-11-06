@@ -96,6 +96,12 @@ class ListingError(Exception):
     """L'elenco non si legge più (formato cambiato o errore del sito)."""
 
 
+class RelayRejected(ListingError):
+    """Il ponte del Worker ha rifiutato la firma del job (HTTP 401 "Firma non valida"): job e Worker hanno
+    token Slack diversi, di solito perché i segreti su GitHub sono cambiati e il Worker non è stato ripubblicato.
+    ANAS non è stata contattata."""
+
+
 @dataclass
 class Structure:
     """Una struttura territoriale dell'elenco (BA, MI...): il codice è anche la chiave in D1."""
@@ -318,6 +324,10 @@ class ListingClient:
             self.anas._throttle(f"ricerca {code} pagina {page} (secondo tentativo)")
         if r.status_code in (429, 500, 502, 503, 504):
             raise TransientError(f"elenco {code}: HTTP {r.status_code}")
+        if r.status_code == 401 and "Firma non valida" in (r.text or ""):
+            raise RelayRejected("il ponte del Worker ha rifiutato la firma del job (HTTP 401): il Worker ha un token "
+                                "Slack diverso da quello del job. Ripubblica il Worker (Actions -> Pubblica Worker "
+                                "(Cloudflare)). ANAS non è stata contattata, nessuna richiesta consumata")
         try:
             body = r.json()
         except (ValueError, json.JSONDecodeError) as exc:

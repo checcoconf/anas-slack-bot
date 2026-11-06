@@ -758,3 +758,23 @@ def test_atlas_is_seeded_once_from_the_archive(env):
     _install(p, listing)
     assert Atlante(db.b).lookup(["SS268"], "0+100", "0+500") == ["NA"]
     assert db.get("atlante_seeded") == "1" and src.requests == []
+
+
+def test_worker_401_is_relay_rejected():
+    from anas_bot.anas import listing as L
+    from anas_bot.anas.robots import RobotsPolicy
+
+    class Resp:
+        status_code, text, headers = 401, "Firma non valida", {}
+
+        def json(self):
+            raise ValueError("non JSON")
+
+    class Session:
+        def post(self, *a, **k):
+            return Resp()
+    lc = L.ListingClient(type("Anas", (), {"timeout": 1, "session": Session(), "_throttle": lambda self, what="": None,
+                                           "robots": RobotsPolicy.allow_all("t")})())
+    lc._primed = True
+    with pytest.raises(L.RelayRejected):
+        lc.search_page("BA", date(2026, 11, 2), 1)
