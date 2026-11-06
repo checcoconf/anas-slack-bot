@@ -5,14 +5,14 @@ Da incollare a mano il giorno del rilascio (non stanno nel manifest). Sezioni: *
 ## Display Information (già nel manifest, qui per riferimento)
 
 - **Nome:** anas-bot
-- **Descrizione breve:** Avvisi privati su chiusure, riaperture e limiti ANAS nelle zone che scegli tu
+- **Descrizione breve:** Chiusure, riaperture e limiti ANAS in privato, nelle zone che scegli · di checcoconf per Waze Italia
 - **Descrizione lunga:** vedi `manifest.yaml` (`long_description`).
 
 ## Security & Compliance
 
 **Privacy policy / Cosa conserva l'app**
 
-anas-bot conserva soltanto l'ID Slack dell'utente e le preferenze che sceglie (zone, tipi di avviso, pausa), più la coda dei messaggi da inviare. Non legge messaggi, non accede a canali, non conserva nomi, email o altri dati del profilo. I dati stanno in un database Cloudflare D1 dell'autore e si cancellano su richiesta (basta scrivere all'autore) o mettendo in pausa l'app, che da quel momento non invia più nulla.
+anas-bot conserva soltanto l'ID Slack dell'utente e le preferenze che sceglie (zone, tipi di avviso, pausa), più la coda dei messaggi da inviare. Non legge messaggi, non accede a canali, non conserva nomi, email o altri dati del profilo. I dati stanno in un database Cloudflare D1 dell'autore e si cancellano su richiesta (basta scrivere a checcoconf) o mettendo in pausa l'app, che da quel momento non invia più nulla.
 
 **Fonte dei dati**
 
@@ -24,11 +24,11 @@ La selezione delle ordinanze "utili per Waze" (chiusure, riaperture, limiti perm
 
 **Contatto**
 
-Francesco Conforti (checcoconf) — <inserire email o canale Slack di contatto>
+Francesco Conforti (checcoconf) — scrivere in privato a checcoconf sullo Slack di Waze Italia
 Codice sorgente: https://github.com/checcoconf/anas-slack-bot
 
 **Scope richiesti e perché**
 
-- `chat:write`: inviare i messaggi privati e, se configurato, scrivere nel canale delle chiusure autostradali
+- `chat:write`: inviare i messaggi privati e scrivere nel canale delle chiusure autostradali (solo dove il bot è stato invitato)
 - `im:write`: aprire la conversazione privata con chi attiva l'app
 - evento `app_home_opened`: mostrare la scheda Home con le preferenze

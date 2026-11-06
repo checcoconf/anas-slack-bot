@@ -1,5 +1,7 @@
 # anas-bot: bot Slack per Waze Italia
 
+Ideato e sviluppato da **Francesco Conforti ([checcoconf](https://github.com/checcoconf))** per la community Waze Italia.
+
 Il bot avvisa in privato gli editor quando ANAS pubblica un'ordinanza utile per la mappa:
 
 - ⛔ **chiusure** di strade, carreggiate, rampe e svincoli, e le relative ✅ **riaperture**;

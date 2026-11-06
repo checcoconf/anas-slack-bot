@@ -147,6 +147,7 @@ test("modulo: salvataggio, scheda Home e conferma", async () => {
   assert.equal(row.want_speed, 1);
   const home = slackCalls("views.publish")[0].body.view;
   assert.match(JSON.stringify(home), /Avvisi attivi/);
+  assert.match(JSON.stringify(home), /checcoconf/);  // la firma dell'autore resta in fondo alla Home
   assert.match(slackCalls("chat.postMessage")[0].body.blocks[0].text.text, /Cuneo \(CN\)/);
   await settle();
   const dispatched = calls.filter((c) => c.url.includes("/actions/workflows/"));

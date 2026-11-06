@@ -6,15 +6,18 @@
 # groups:read, users:read e gli eventi member_joined_channel / member_left_channel.
 display_information:
   name: anas-bot
-  description: Avvisi privati su chiusure, riaperture e limiti ANAS nelle zone che scegli tu
+  description: Chiusure, riaperture e limiti ANAS in privato, nelle zone che scegli · di checcoconf per Waze Italia
   long_description: >-
     anas-bot legge le ordinanze pubblicate da ANAS su Ordinanze Web e manda un messaggio privato agli editor
     Waze Italia che hanno scelto di seguire una o più zone (tutta Italia, regioni o province): chiusure di strade,
-    rampe e svincoli, riaperture e nuovi limiti di velocità permanenti, con strada, chilometri, date e il link
-    al PDF dell'ordinanza. Non scrive in nessun canale e non legge nessun messaggio: per attivarlo basta aprire
-    la scheda Home dell'app e scegliere le zone; per fermarlo, mettere in pausa dalla stessa scheda.
+    carreggiate, rampe e svincoli, riaperture, nuove strade e nuovi limiti di velocità permanenti, con strada,
+    chilometri, date e il link al PDF dell'ordinanza. Chi vuole può ricevere a parte anche tutte le altre
+    ordinanze (cantieri, corsie ridotte, sensi unici alternati...) nelle zone che sceglie per quelle.
+    Appena scelte le zone arriva il riepilogo delle ordinanze già in vigore, poi solo le novità.
+    Per attivarlo basta aprire la scheda Home dell'app e scegliere le zone; per fermarlo, metterlo in pausa
+    dalla stessa scheda. Le chiusure autostradali arrivano anche nel canale dedicato. Non legge nessun messaggio.
     I dati ANAS sono pubblici; l'app conserva solo l'ID Slack e le zone scelte da chi la attiva.
-    Sviluppata da Francesco Conforti (checcoconf) per la community Waze Italia.
+    Ideata e sviluppata da Francesco Conforti (checcoconf) per la community Waze Italia.
     Codice sorgente: https://github.com/checcoconf/anas-slack-bot
   background_color: "#1f3a5f"
 features:

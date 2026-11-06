@@ -56,3 +56,9 @@ def test_access_titles():
     assert _access_title("area di servizio") == "AREA DI SERVIZIO CHIUSA"
     assert _access_title("svincolo e rampa") == "SVINCOLO E RAMPA CHIUSI"
     assert _access_title("") == "ACCESSO CHIUSO"
+
+
+def test_author_credit_in_welcome():
+    from anas_bot import views
+    assert "checcoconf" in views.CREDIT
+    assert views.CREDIT in str(views.welcome_message())

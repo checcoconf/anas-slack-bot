@@ -43,6 +43,7 @@ def build() -> dict:
         },
         "welcome": views.welcome_message(),
         "betaNotice": views.BETA_NOTICE,
+        "credit": views.CREDIT,
         "modal": views.preferences_modal(None),
         "regions": {MOTORWAYS: MOTORWAYS_LABEL, **REGIONS},
         "provinces": {p.code: {"name": p.name, "region": p.region} for p in PROVINCES},

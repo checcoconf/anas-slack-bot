@@ -66,13 +66,14 @@ export default {
     "elements": [
      {
       "type": "mrkdwn",
-      "text": "⚙️ Puoi cambiarle quando vuoi dalla scheda *Home* di questa app.\n🧪 Il filtro \"utili per Waze\" è in beta: legge il riepilogo di ANAS con regole, non è perfetto. Può perdere qualche ordinanza o mandarne qualcuna che non c'entra. Se noti un errore, segnalalo."
+      "text": "⚙️ Puoi cambiarle quando vuoi dalla scheda *Home* di questa app.\n🧪 Il filtro \"utili per Waze\" è in beta: legge il riepilogo di ANAS con regole, non è perfetto. Può perdere qualche ordinanza o mandarne qualcuna che non c'entra. Se noti un errore, segnalalo a checcoconf.\n🛠️ Creato da *Francesco Conforti* (checcoconf) per la community Waze Italia · <https://github.com/checcoconf/anas-slack-bot|codice sorgente>"
      }
     ]
    }
   ]
  },
- "betaNotice": "🧪 Il filtro \"utili per Waze\" è in beta: legge il riepilogo di ANAS con regole, non è perfetto. Può perdere qualche ordinanza o mandarne qualcuna che non c'entra. Se noti un errore, segnalalo.",
+ "betaNotice": "🧪 Il filtro \"utili per Waze\" è in beta: legge il riepilogo di ANAS con regole, non è perfetto. Può perdere qualche ordinanza o mandarne qualcuna che non c'entra. Se noti un errore, segnalalo a checcoconf.",
+ "credit": "🛠️ Creato da *Francesco Conforti* (checcoconf) per la community Waze Italia · <https://github.com/checcoconf/anas-slack-bot|codice sorgente>",
  "modal": {
   "type": "modal",
   "callback_id": "prefs_modal",
@@ -1493,7 +1494,7 @@ export default {
     "elements": [
      {
       "type": "mrkdwn",
-      "text": "🧪 Il filtro \"utili per Waze\" è in beta: legge il riepilogo di ANAS con regole, non è perfetto. Può perdere qualche ordinanza o mandarne qualcuna che non c'entra. Se noti un errore, segnalalo."
+      "text": "🧪 Il filtro \"utili per Waze\" è in beta: legge il riepilogo di ANAS con regole, non è perfetto. Può perdere qualche ordinanza o mandarne qualcuna che non c'entra. Se noti un errore, segnalalo a checcoconf."
      }
     ]
    },

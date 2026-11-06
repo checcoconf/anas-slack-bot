@@ -150,7 +150,11 @@ def preferences_modal(user: User | None) -> dict:
 
 
 # Avviso mostrato nel modulo, nella scheda Home e nel benvenuto: la classificazione è automatica.
-BETA_NOTICE = ('🧪 Il filtro "utili per Waze" è in beta: legge il riepilogo di ANAS con regole, non è perfetto. Può perdere qualche ordinanza o mandarne qualcuna che non c\'entra. Se noti un errore, segnalalo.')
+BETA_NOTICE = ('🧪 Il filtro "utili per Waze" è in beta: legge il riepilogo di ANAS con regole, non è perfetto. Può perdere qualche ordinanza o mandarne qualcuna che non c\'entra. Se noti un errore, segnalalo a checcoconf.')
+
+# Firma dell'autore: in fondo alla scheda Home e al messaggio di benvenuto.
+CREDIT = ('🛠️ Creato da *Francesco Conforti* (checcoconf) per la community Waze Italia · '
+          '<https://github.com/checcoconf/anas-slack-bot|codice sorgente>')
 
 
 def welcome_message() -> dict:
@@ -168,7 +172,7 @@ def welcome_message() -> dict:
                 {"type": "button", "style": "primary", "action_id": ACTION_OPEN_PREFS,
                  "text": _txt("🗺️ Scegli le zone")}]},
             {"type": "context", "elements": [{"type": "mrkdwn", "text":
-                "⚙️ Puoi cambiarle quando vuoi dalla scheda *Home* di questa app.\n" + BETA_NOTICE}]},
+                "⚙️ Puoi cambiarle quando vuoi dalla scheda *Home* di questa app.\n" + BETA_NOTICE + "\n" + CREDIT}]},
         ],
     }
 

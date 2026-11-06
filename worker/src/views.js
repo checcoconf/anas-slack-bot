@@ -130,6 +130,7 @@ export function homeView(u) {
   }
   blocks.push({ type: "actions", elements: buttons });
   blocks.push({ type: "context", elements: [{ type: "mrkdwn", text: `📄 Fonte: ordinanze pubblicate da ANAS S.p.A. Controlla sempre il PDF prima di modificare la mappa.\n${G.betaNotice}` }] });
+  blocks.push({ type: "context", elements: [{ type: "mrkdwn", text: G.credit }] });
   return { type: "home", blocks };
 }
 
