@@ -89,7 +89,7 @@ class Config:
     # Lettura profonda di notte (ANAS non pubblica, il ritmo resta lo stesso): più pagine per struttura,
     # per le ordinanze che il sito non mette in prima pagina (ordina per inizio validità, non per pubblicazione).
     listing_deep_pages: int = 4  # pagine lette sempre, per struttura, nelle ore "profonde"
-    listing_deep_hours: str = "0-6"  # ore locali (da-a, estremo finale escluso); vuoto = mai
+    listing_deep_hours: str = "0-6"  # ore locali (da-a, estremo finale escluso); "no" = mai
     anas_bot_key: str = ""  # codice concordato con ANAS, mandato nell'intestazione X-Waze-Bot-Key
     # Secondo parere del modello locale (anas_bot/ai.py): flag = segna "da verificare" e amplia il vocabolario;
     # log = solo nel log; off = non si carica. Il file del modello lo scarica il workflow (AI_MODEL_URL).
@@ -147,7 +147,10 @@ class Config:
         c.listing_fast_pages_min = _int("LISTING_FAST_PAGES_MIN", c.listing_fast_pages_min)
         c.listing_fast_pages_max = _int("LISTING_FAST_PAGES_MAX", c.listing_fast_pages_max)
         c.listing_deep_pages = _int("LISTING_DEEP_PAGES", c.listing_deep_pages)
-        c.listing_deep_hours = os.environ.get("LISTING_DEEP_HOURS", c.listing_deep_hours).strip()
+        # Vuota = il default (0-6): GitHub passa "" quando la variabile non esiste, e "vuoto = mai" aveva spento
+        # per errore la lettura notturna dal rilascio (07/11/2026). Per spegnerla davvero: "no".
+        deep = _str("LISTING_DEEP_HOURS", c.listing_deep_hours)
+        c.listing_deep_hours = "" if deep.lower() in ("no", "off", "mai", "0") else deep
         c.walk_always = _bool("WALK_ALWAYS", c.walk_always)
         c.job_time_budget_minutes = _int("JOB_TIME_BUDGET_MINUTES", c.job_time_budget_minutes)
         c.welcome_existing_members = _bool("WELCOME_EXISTING_MEMBERS", c.welcome_existing_members)

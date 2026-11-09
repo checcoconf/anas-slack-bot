@@ -51,9 +51,9 @@ Il Responsabile
 MIXED_LANE_AND_CLOSURE = HEADER_ABRUZZO + """
 ORDINANZA n. 301/2026
 ORDINA
-* la chiusura della corsia di marcia della SS 16 dal km 450+000 al km 451+000 dal 05/11/2026 al 06/11/2026;
+* la chiusura della corsia di marcia della SS 16 dal km 450+000 al km 451+000 dal 05/11/2026 al 06/11/2036;
 * la chiusura al traffico dello svincolo di Francavilla al Mare sulla SS 16 al km 452+300, rampa di uscita,
-dal 05/11/2026 al 06/11/2026 dalle ore 21:00 alle ore 06:00.
+dal 05/11/2026 al 06/11/2036 dalle ore 21:00 alle ore 06:00.
 Il Responsabile
 """
 

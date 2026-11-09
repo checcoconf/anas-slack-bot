@@ -37,7 +37,7 @@ import logging
 import re
 import time
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, timedelta
 
 from .anas.budget import BudgetExhausted
 from .anas.client import BlockedError, TransientError
@@ -64,7 +64,13 @@ log = logging.getLogger(__name__)
 
 _REF_NUMBER = re.compile(r"\b(\d{1,5})\s*/\s*(\d{4})\s*/\s*([A-Z]{2,3})\b")
 MAX_CARRY_PAGES = 6  # pagine in più che la lettura veloce può accumulare se arrivano molte novità
-MAX_PROVINCE_WAIT = 1  # giri di attesa (di giorno) per la provincia di una chiusura, prima di partire con la sola regione
+MAX_PROVINCE_WAIT = 1
+# Ordinanze "in attesa" (proroghe che aspettano il PDF, "altre" che aspettano la provincia): ID -> giorno in cui
+# il bot le ha viste la prima volta. Dalla seconda volta non contano più come "nuove", così non fanno leggere
+# pagine in più a ogni passaggio. Il 09/11/2026 queste attese avevano allungato il giro d'Italia da ~2,5 a
+# ~4,5 ore (Bari letta alle 19:00 e di nuovo alle 23:30): la 749/2026/BA è arrivata con 4 ore di ritardo.
+WAITING_KEY = "listing_waiting"
+WAITING_MAX_DAYS = 30  # giri di attesa (di giorno) per la provincia di una chiusura, prima di partire con la sola regione
 _INHERITED = ("category", "roads", "road_names", "km_from", "km_to", "provinces", "regions", "province_inferred",
               "start_date", "time_window", "speed_kmh", "speeds", "ramp_only", "new_road", "direction", "excerpt")
 
@@ -312,16 +318,26 @@ class ListingPoller:
         res.seen += len(ids)
         res.max_id = max([res.max_id, *ids])
         new = 0
+        waiting = getattr(self, "_waiting", {})
         for rec in records:
             ord_id = int(rec["ID"])
             if ord_id in known:
+                waiting.pop(str(ord_id), None)
                 if not baseline:  # il canale a numeri l'aveva scartata? l'elenco può correggerla
                     o = record_to_ordinanza(rec, st.label, self.source.url_for(ord_id))
                     if o and o.category in RELEVANT and self.db.upgrade_from_listing(o):
                         res.upgraded += 1
                 continue
-            new += 1
+            already_waiting = str(ord_id) in waiting
+            deferred_before = res.deferred
             self._process(rec, st, baseline, installed, res)
+            if res.deferred > deferred_before:
+                waiting.setdefault(str(ord_id), getattr(self, "_today", date.today()).isoformat())
+                if already_waiting:
+                    continue  # in attesa già da un passaggio precedente: non è una novità, niente pagine in più
+            else:
+                waiting.pop(str(ord_id), None)
+            new += 1
         return new
 
     # --- il giro --------------------------------------------------------------------
@@ -358,6 +374,12 @@ class ListingPoller:
 
         self.pdf_budget = self.cfg.max_pdf_per_run
         self.pdf_budget_day = self.cfg.max_pdf_per_run_day
+        self._today = today
+        try:
+            self._waiting = {str(k): str(v) for k, v in json.loads(self.db.get(WAITING_KEY, "{}") or "{}").items()}
+        except (ValueError, AttributeError):
+            self._waiting = {}
+        waiting_before = dict(self._waiting)
         # regioni in cui almeno un iscritto segue le "altre ordinanze" per singola provincia: lì la provincia
         # delle "altre" va letta dal PDF (di notte), perché "nel dubbio a tutta la regione" non vale per loro
         self._province_regions = {PROVINCE_BY_CODE[p].region for u in self.db.all_users() if u.receives and u.want_all
@@ -380,6 +402,11 @@ class ListingPoller:
         except ListingError as exc:
             res.error, res.broken = str(exc), True
             log.error("Elenco ANAS non leggibile: %s", exc)
+        # attese più vecchie di WAITING_MAX_DAYS: scadute o mai pubblicate, si dimenticano
+        limit = (today - timedelta(days=WAITING_MAX_DAYS)).isoformat()
+        self._waiting = {k: v for k, v in self._waiting.items() if v >= limit}
+        if self._waiting != waiting_before:
+            self.db.set(WAITING_KEY, json.dumps(self._waiting, sort_keys=True))
         # Il canale a numeri (di riserva) riparte sempre da qui: se un giorno l'elenco non si legge,
         # cerca solo le ordinanze più nuove, mai quelle vecchie di mesi.
         if res.max_id > (self.db.cursor() or 0):

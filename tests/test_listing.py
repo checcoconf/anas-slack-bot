@@ -542,6 +542,18 @@ def test_deep_hours_parsing():
     assert not cfg.is_deep_hour(3)
 
 
+def test_deep_hours_default_when_github_passes_an_empty_variable(monkeypatch):
+    """GitHub passa LISTING_DEEP_HOURS="" se la variabile non esiste: deve valere il default 0-6, non "mai"
+    (dal rilascio la lettura notturna e i PDF di notte erano spenti per questo, 07/11/2026)."""
+    monkeypatch.setenv("LISTING_DEEP_HOURS", "")
+    cfg = Config.from_env()
+    assert cfg.listing_deep_hours == "0-6" and cfg.is_deep_hour(1)
+    monkeypatch.setenv("LISTING_DEEP_HOURS", "no")
+    assert not Config.from_env().is_deep_hour(1)
+    monkeypatch.setenv("LISTING_DEEP_HOURS", "0-8")
+    assert Config.from_env().is_deep_hour(7)
+
+
 def test_one_structure_in_error_does_not_stop_the_others(env):
     cfg, db, listing, src = env
     p = ListingPoller(db, listing, src, cfg)
@@ -778,3 +790,65 @@ def test_worker_401_is_relay_rejected():
     lc._primed = True
     with pytest.raises(L.RelayRejected):
         lc.search_page("BA", date(2026, 11, 2), 1)
+
+
+def test_lane_narrowing_with_closure_on_a_ramp_is_not_a_closure():
+    """749/2026/BA (SS 7, svincolo in uscita verso la A14, 10/11/2026): "restringimento carreggiata destra" +
+    "chiusura al traffico" = chiusura di una corsia (tavole del PDF: corsia di emergenza e corsia di marcia),
+    il traffico passa. Va tra le "altre ordinanze", non tra le chiusure, e senza "carreggiata Destra" come direzione."""
+    rec = _rec(215301, _riep("SS 7 VIA APPIA dal km 631+700 al km 631+000",
+                             "sullo <strong>svincolo in uscita</strong>, compreso il ramo di allacciamento con la "
+                             "Autostrada A14",
+                             ["restringimento carreggiata destra", "chiusura al traffico"],
+                             "a partire dal <strong>11/11/2026</strong> fino al <strong>12/11/2026</strong> nella "
+                             "fascia oraria dalle 22:00 alle 06:00 del giorno successivo"),
+               numero="749/2026/BA")
+    o = record_to_ordinanza(rec, "Bari", "u")
+    assert o.category == OTHER
+    assert o.direction == ""
+
+
+def test_ramp_closure_without_narrowing_is_still_a_closure():
+    rec = _rec(215302, _riep("SS 7 VIA APPIA dal km 631+700 al km 631+000", "sullo <strong>svincolo in uscita</strong>",
+                             ["chiusura al traffico"], "a partire dal <strong>11/11/2026</strong>"))
+    o = record_to_ordinanza(rec, "Bari", "u")
+    assert o.category == CLOSURE and o.ramp_only
+
+
+def test_all_lanes_closed_with_narrowing_stays_a_closure():
+    """SS 100, fase 2 (cantiere notturno con chiusura totale della carreggiata in dir. Bari): "tutte le corsie" +
+    "restringimento carreggiata sinistra" + "chiusura al traffico" resta una chiusura: il restringimento è di
+    un'altra fase, la carreggiata è chiusa."""
+    rec = _rec(215303, _riep("SS 100 DI GIOIA DEL COLLE dal km 17+000 al km 18+600", "su <strong>tutte le corsie</strong>,",
+                             ["restringimento carreggiata sinistra", "chiusura al traffico"],
+                             "a partire dal <strong>11/11/2026</strong>"))
+    assert record_to_ordinanza(rec, "Bari", "u").category == CLOSURE
+
+
+def test_waiting_items_do_not_make_the_bot_read_extra_pages(env):
+    """Una proroga che aspetta il PDF della notte: al primo passaggio è una novità (il bot guarda anche la
+    pagina 2), dal secondo no (si ferma alla pagina 1), così il giro d'Italia non si allunga (09/11/2026:
+    giro passato da ~2,5 a ~4,5 ore per le attese). Di notte il PDF si legge e l'attesa sparisce."""
+    cfg, db, listing, src = env
+    p = ListingPoller(db, listing, src, cfg)
+    _install(p, listing)
+    src.docs[213700] = "ORDINANZA N°950/2026/BA\\nORDINA la proroga dell'ordinanza n. 900/2026/BA fino al 15/12/2026"
+    proroga = {"ID": "213700", "TIPO_ORDINANZA": "Proroga", "NUMERO_ORDINANZA": "950/2026/BA", "COMPARTIMENTO": "Bari",
+               "CAUSA": "Cantiere", "CAUSA_DETT": "", "RIEPILOGO": "", "PROROGA_DATA": "15/12/2026"}
+    listing.pages["BA"].insert(0, proroga)
+
+    def ba_pages():
+        return [pg for code, pg in listing.calls if code == "BA"]
+
+    listing.calls.clear()
+    r = ListingPoller(db, listing, src, cfg).run(date(2026, 11, 2), hour=14)  # di giorno: niente PDF di proroghe
+    assert r.deferred == 1 and ba_pages() == [1, 2]
+    assert "213700" in json.loads(db.get("listing_waiting"))
+
+    listing.calls.clear()
+    r = ListingPoller(db, listing, src, cfg).run(date(2026, 11, 2), hour=16)
+    assert r.deferred == 1 and ba_pages() == [1]  # già in attesa: niente pagina 2
+
+    ListingPoller(db, listing, src, cfg).run(date(2026, 11, 3), hour=3)  # di notte: PDF letto, proroga salvata
+    assert db.get_ordinanza(213700) is not None
+    assert "213700" not in json.loads(db.get("listing_waiting") or "{}")

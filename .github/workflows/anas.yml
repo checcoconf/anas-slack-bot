@@ -38,7 +38,7 @@ jobs:
       - name: Modello locale dalla cache
         id: model-cache
         if: vars.AI_MODE != 'off'
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/modelli/modello.gguf
           key: modello-${{ vars.AI_MODEL_URL || 'qwen2.5-7b-instruct-q4_k_m' }}
@@ -60,7 +60,7 @@ jobs:
       - name: Ruota di llama.cpp dalla cache
         id: llama-cache
         if: vars.AI_MODE != 'off'
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/ruote-llama
           key: llama-portabile-avx2-v2-py3.13-${{ hashFiles('requirements-ai.txt') }}

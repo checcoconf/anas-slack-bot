@@ -528,7 +528,11 @@ def classify_provision(p: Provision, rec: dict | None = None) -> Provision:
         whole = bool(_WHOLE.search(p.lanes))
         ramp = any(r in p.lanes for r in RAMPS)
         lanes_only = any(lane in p.lanes for lane in LANES) and not whole and not ramp
-        partial = any(h in p.lanes for h in PARTIAL_HINTS) and not whole
+        # "restringimento carreggiata" tra i provvedimenti: la "chiusura al traffico" accanto è di una corsia,
+        # non della strada né dello svincolo: il traffico passa (749/2026/BA, SS 7 svincolo per la A14, 10/11/2026:
+        # le tavole del PDF erano "chiusura della corsia di emergenza" e "chiusura della corsia di marcia")
+        narrowed = any(m.startswith("restringimento") for m in measures)
+        partial = (any(h in p.lanes for h in PARTIAL_HINTS) or narrowed) and not whole
         if not lanes_only and not partial:
             p.category = CLOSURE
             p.ramp_only = ramp and not whole
@@ -594,7 +598,12 @@ def record_to_ordinanza(rec: dict, structure_label: str, pdf_url: str) -> Ordina
         o.ramp_only = all(p.ramp_only for p in closures)
         if o.ramp_only:
             o.access_kind = access_kind(" ".join(p.lanes for p in closures))
-    o.direction = extract_direction(chosen.lanes) or extract_direction(chosen.text)
+    # la direzione si cerca nel "dove" e nel resto del testo, ma non nell'elenco dei provvedimenti:
+    # "restringimento carreggiata destra" non è il senso di marcia
+    rest = chosen.text
+    for m in chosen.measures:
+        rest = rest.replace(m, " ")
+    o.direction = extract_direction(chosen.lanes) or extract_direction(rest)
     o.excerpt = clean_excerpt(chosen.plain)
     if category == CLOSURE and chosen.where_unknown:
         o.uncertain = True
