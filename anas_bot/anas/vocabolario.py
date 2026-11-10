@@ -98,6 +98,6 @@ def measure_key(m: str) -> str:
     return re.sub(r"\d+([.,]\d+)?", "N", m).strip(" .;,")
 
 
-def unknown_measures(measures: list[str], extra: set[str] | frozenset[str] = frozenset()) -> list[str]:
-    """Voci non nel vocabolario (né tra quelle aggiunte a runtime, `extra`: vedi listing_poller)."""
-    return sorted({measure_key(m) for m in measures} - KNOWN_MEASURES - set(extra))
+def unknown_measures(measures: list[str]) -> list[str]:
+    """Voci non nel vocabolario: arrivano all'admin come 🆕 da classificare."""
+    return sorted({measure_key(m) for m in measures} - KNOWN_MEASURES)

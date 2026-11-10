@@ -29,51 +29,8 @@ jobs:
         with:
           python-version: "3.13"
           cache: pip
-          # requirements-ai.txt NON qui: la ruota di llama.cpp ha una cache sua (sotto), senza chiavi di riserva
           cache-dependency-path: requirements.txt
       - run: pip install -r requirements.txt
-
-      # Secondo parere del modello locale (anas_bot/ai.py): facoltativo, se qualcosa fallisce il giro va avanti senza.
-      # Il modello (4,7 GB) e la ruota di llama-cpp-python restano ciascuno in una cache di Actions dedicata.
-      - name: Modello locale dalla cache
-        id: model-cache
-        if: vars.AI_MODE != 'off'
-        uses: actions/cache@v5
-        with:
-          path: ~/modelli/modello.gguf
-          key: modello-${{ vars.AI_MODEL_URL || 'qwen2.5-7b-instruct-q4_k_m' }}
-      - name: Scarica il modello locale (solo la prima volta)
-        if: vars.AI_MODE != 'off' && steps.model-cache.outputs.cache-hit != 'true'
-        continue-on-error: true
-        run: |
-          mkdir -p ~/modelli
-          curl -L --fail --retry 3 -o ~/modelli/modello.gguf \
-            "${{ vars.AI_MODEL_URL || 'https://huggingface.co/bartowski/Qwen2.5-7B-Instruct-GGUF/resolve/main/Qwen2.5-7B-Instruct-Q4_K_M.gguf' }}"
-      # llama-cpp-python: compilata UNA volta, portabile, e tenuta in una cache tutta sua. Perché così:
-      # - GGML_NATIVE=OFF: solo istruzioni comuni a tutti i runner (AVX2). Una ruota "su misura" per la CPU
-      #   del runner che l'ha compilata crolla ("illegal instruction") sui runner con CPU diverse (05/11/2026);
-      # - non nella cache pip: quella di setup-python ha una chiave di riserva che riportava indietro la ruota
-      #   vecchia, e pip la riusava ignorando le opzioni di compilazione;
-      # - l'installazione accetta SOLO la ruota di questa cache (--only-binary): mai una copia vecchia, mai
-      #   una ricompilazione a sorpresa. Se manca, il giro va avanti senza modello.
-      # Per ricompilare (nuova versione, nuove opzioni): cambiare "avx2-v2" nella chiave.
-      - name: Ruota di llama.cpp dalla cache
-        id: llama-cache
-        if: vars.AI_MODE != 'off'
-        uses: actions/cache@v5
-        with:
-          path: ~/ruote-llama
-          key: llama-portabile-avx2-v2-py3.13-${{ hashFiles('requirements-ai.txt') }}
-      - name: Compila llama.cpp per Python (solo la prima volta, ~3 minuti)
-        if: vars.AI_MODE != 'off' && steps.llama-cache.outputs.cache-hit != 'true'
-        continue-on-error: true
-        env:
-          CMAKE_ARGS: "-DGGML_NATIVE=OFF -DGGML_AVX=ON -DGGML_AVX2=ON -DGGML_FMA=ON -DGGML_F16C=ON"
-        run: pip wheel --no-cache-dir --no-deps -w ~/ruote-llama -r requirements-ai.txt
-      - name: Installa llama.cpp per Python
-        if: vars.AI_MODE != 'off'
-        continue-on-error: true
-        run: pip install --no-cache-dir --find-links ~/ruote-llama --only-binary llama-cpp-python -r requirements-ai.txt
 
       - name: Giro ANAS -> Slack
         run: python -m anas_bot.job
@@ -112,6 +69,4 @@ jobs:
           LISTING_DEEP_HOURS: ${{ vars.LISTING_DEEP_HOURS }}
           # codice concordato con ANAS per l'eccezione nel loro firewall (se ve lo danno)
           ANAS_BOT_KEY: ${{ secrets.ANAS_BOT_KEY }}
-          AI_MODE: ${{ vars.AI_MODE }}          # flag (default) | log | off
-          AI_MODEL_PATH: ${{ vars.AI_MODE != 'off' && '~/modelli/modello.gguf' || '' }}
           WORKER_URL: ${{ vars.WORKER_URL }}

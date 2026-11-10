@@ -1,4 +1,0 @@
-# Secondo parere del modello locale (anas_bot/ai.py): facoltativo, installato dal workflow con continue-on-error.
-# Versione bloccata. La ruota è compilata una volta sola, portabile (GGML_NATIVE=OFF), e tenuta in una cache
-# di Actions dedicata (vedi .github/workflows/anas.yml): cambiare questo file la fa ricompilare.
-llama-cpp-python==0.3.36
