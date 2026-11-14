@@ -137,7 +137,8 @@ ANAS, quindi nessun effetto sul tetto delle 10 richieste l'ora). Codice in `anas
   (`static-traffico.provincia.bz.it/publications/rss/tutte-le-categorie.xml`). Chiusure (scritte in maiuscolo
   nel bollettino: CHIUSA, CHIUSURA NOTTURNA, CHIUSURA INVERNALE) come ⛔; sensi unici alternati, "chiusure
   temporanee fino a 15 minuti", divieti per categorie come "altre ordinanze". Ciclabili, treni, bus e notizie
-  fuori provincia si scartano. Zona: provincia di Bolzano.
+  fuori provincia si scartano. Zona: provincia di Bolzano. Si legge solo quando il bollettino è aggiornato
+  (lun-sab 6-21, domenica 8-21).
 - **Autostrada del Brennero (A22)**: gli avvisi della pagina "Viabilità > Avvisi", letti dal JSON che la pagina
   usa (`/api/MapApi/GetAvvisi`). Scambio di carreggiata = chiusura della carreggiata (regola Waze); "deviazione
   di carreggiata con 2 flussi" = chiusura *da verificare*; svincoli/caselli chiusi = chiusura dell'accesso;

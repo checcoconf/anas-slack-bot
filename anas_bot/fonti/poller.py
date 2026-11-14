@@ -56,9 +56,13 @@ class FontiPoller:
             return a22.parse_avvisi(json.loads(self.get(a22.API_URL).text))
         raise ValueError(f"fonte sconosciuta: {source}")
 
-    def run(self, today: date) -> FontiResult:
+    def run(self, today: date, now=None) -> FontiResult:
+        """now: data e ora locali del giro (per gli orari del bollettino di Bolzano); None = leggi sempre."""
         res = FontiResult()
         for source in self.enabled:
+            if source == "bz" and now is not None and not bolzano.is_updated_now(now):
+                log.info("Fonte %s: fuori dagli orari di aggiornamento del bollettino, non letta", SOURCE_LABELS[source])
+                continue
             fail_key = f"fonte_{source}_failed"
             try:
                 items = self._read(source)

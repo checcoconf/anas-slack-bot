@@ -27,6 +27,15 @@ from . import ID_OFFSET
 log = logging.getLogger(__name__)
 
 FEED_URL = "https://static-traffico.provincia.bz.it/publications/rss/tutte-le-categorie.xml"
+
+
+def is_updated_now(when) -> bool:
+    """Il bollettino è aggiornato lun-sab 06:30-20:00, domeniche e festivi 08:00-20:00 (pagina del bollettino,
+    14/11/2026). Fuori da queste fasce non cambia: niente richieste. Margine: dalle 6 (dalle 8 la domenica)
+    fino alle 20:59, così si prende anche l'ultimo aggiornamento delle 20. I festivi infrasettimanali si
+    leggono come i feriali (una richiesta in più, nessun danno)."""
+    start = 8 if when.weekday() == 6 else 6
+    return start <= when.hour <= 20
 PAGE_URL = "https://traffico.provincia.bz.it/it/"
 
 # categorie che non riguardano la mappa stradale (o non la provincia)

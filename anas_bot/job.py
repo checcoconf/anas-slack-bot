@@ -112,7 +112,7 @@ def run(cfg: Config, db: Database, client, source, listing=None, started: float 
     # 0) Fonti oltre ANAS (Provincia di Bolzano, A22): due richieste, mai verso ANAS, mai bloccanti
     if cfg.enabled_sources():
         try:
-            fres = FontiPoller(db, cfg.enabled_sources(), cfg.anas_user_agent).run(today)
+            fres = FontiPoller(db, cfg.enabled_sources(), cfg.anas_user_agent).run(today, local_now)
             for text in fres.alerts:
                 admin(client, cfg, text)
             if any(fres.new.values()):

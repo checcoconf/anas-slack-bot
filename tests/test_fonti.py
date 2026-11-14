@@ -224,3 +224,20 @@ def test_many_notices_respect_the_d1_variable_limit(tmp_path):
     r = _poller(db, {bolzano.FEED_URL: feed, a22.API_URL: A22_JSON}).run(date(2026, 11, 14))
     assert r.errors == {} and r.new == {"bz": 0, "a22": 0}
     assert len(db.get_ordinanze([ID_OFFSET["bz"] + 40000 + i for i in range(250)])) == 250
+
+
+def test_bolzano_is_read_only_while_the_bulletin_is_updated(tmp_path):
+    from datetime import datetime
+    assert bolzano.is_updated_now(datetime(2026, 11, 14, 6, 5))       # sabato, 6:05
+    assert bolzano.is_updated_now(datetime(2026, 11, 14, 20, 40))      # dopo l'ultimo aggiornamento delle 20
+    assert not bolzano.is_updated_now(datetime(2026, 11, 14, 21, 5))
+    assert not bolzano.is_updated_now(datetime(2026, 11, 15, 7, 5))    # domenica: dalle 8
+    assert bolzano.is_updated_now(datetime(2026, 11, 15, 8, 5))
+    db = Database.local(str(tmp_path / "n.sqlite3"))
+    asked = []
+
+    def get(url):
+        asked.append(url)
+        return _Resp(BZ_XML if url == bolzano.FEED_URL else A22_JSON)
+    FontiPoller(db, ["bz", "a22"], get=get).run(date(2026, 11, 14), datetime(2026, 11, 14, 2, 5))
+    assert asked == [a22.API_URL]  # di notte solo l'A22, che pubblica a ogni ora
