@@ -852,3 +852,20 @@ def test_waiting_items_do_not_make_the_bot_read_extra_pages(env):
     ListingPoller(db, listing, src, cfg).run(date(2026, 11, 3), hour=3)  # di notte: PDF letto, proroga salvata
     assert db.get_ordinanza(213700) is not None
     assert "213700" not in json.loads(db.get("listing_waiting") or "{}")
+
+
+def test_service_road_closure_is_not_a_main_road_closure():
+    """758/2026/BA (SS 16 km 810+400-810+300, 13-30/11/2026): sulla SS 16 si chiude solo la corsia di marcia e
+    quella di accelerazione (il traffico passa), ma la COMPLANARE per la zona commerciale è chiusa (percorso
+    alternativo dalla SP 60): è una chiusura per Waze, della complanare, non della statale."""
+    from anas_bot.views import title_line
+    period = "a partire dal <strong>13/11/2026</strong> fino al <strong>30/11/2026</strong>"
+    riep = (_riep("SS 16 ADRIATICA dal km 810+600 al km 810+300, S.S.16 dir. Bari", "su <strong>corsia di marcia</strong>,",
+                  ["divieto di sorpasso autoveicoli", "limite di velocita 50Km/h", "restringimento carreggiata destra"], period)
+            + _riep("SS 16 ADRIATICA dal km 810+400 al km 810+300, S.S.16 dir. Bari",
+                    "su <strong>corsia di accelerazione</strong>,", ["chiusura al traffico"], period)
+            + _riep("SS 16 ADRIATICA dal km 810+400 al km 810+300, S.S.16 dir. Brindisi e dir. Bari",
+                    "su <strong>complanare</strong>,", ["chiusura al traffico"], period))
+    o = record_to_ordinanza(_rec(215400, riep, numero="758/2026/BA"), "Bari", "u")
+    assert o.category == CLOSURE and o.ramp_only and o.access_kind == "complanare"
+    assert "COMPLANARE CHIUSA" in title_line(o)

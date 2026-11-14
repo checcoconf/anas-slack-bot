@@ -398,7 +398,9 @@ _WHOLE = re.compile(
     r"tutte le corsie|intera carreggiata|intera sede|entrambe le carreggiate|tutta la sede"
     r"|chiusura (?:totale )?(?:della|delle|di una|di entrambe le) carreggiat|carreggiata [a-z]+ chiusa"
 )
-RAMPS = ("rampa", "svincolo", "area di servizio", "stazione di servizio")  # accessi: chiusi, ma la strada no
+# accessi e strade di servizio: chiusi loro, ma la strada principale no. "complanare"/"controstrada": in Waze
+# sono segmenti a sé (758/2026/BA, SS 16 km 810: chiusa la complanare per la zona commerciale, la SS 16 aperta)
+RAMPS = ("rampa", "svincolo", "area di servizio", "stazione di servizio", "complanare", "controstrada")
 LANES = ("corsia di marcia", "corsia di sorpasso", "corsia di emergenza", "corsia di accelerazione",
          "corsia di decelerazione", "corsia preferenziale", "corsia di destra", "corsia di sinistra",
          "corsia destra", "corsia sinistra", "banchina",

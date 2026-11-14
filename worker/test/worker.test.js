@@ -78,7 +78,7 @@ test("cantieri con zone proprie: salvate solo se la voce è accesa, mostrate nel
   assert.equal(row.want_all, 1);
   assert.equal(row.all_provinces, '["TA"]');
   assert.equal(row.all_regions, "[]");                                   // regione inesistente scartata
-  assert.match(slackCalls("chat.postMessage").at(-1).body.blocks[0].text.text, /tutte le altre ordinanze \(solo: .*Taranto/);
+  assert.match(slackCalls("chat.postMessage").at(-1).body.blocks[0].text.text, /tutte le altre ordinanze \(zone: .*Taranto/);
   const modal = (await import("../src/views.js")).preferencesModal(await getUser(env.DB, "U7"));
   const apBlock = modal.blocks.find((b) => b.block_id === G.ids.allProvinces[0]);
   assert.deepEqual(apBlock.element.initial_options.map((o) => o.value), ["TA"]);   // riaperto: la provincia è preselezionata

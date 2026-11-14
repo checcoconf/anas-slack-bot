@@ -107,12 +107,12 @@ def preferences_modal(user: User | None) -> dict:
     if kinds_initial:
         kinds_el["initial_options"] = kinds_initial
     all_regions_el: dict = {"type": "multi_static_select", "action_id": A_ALL_REGIONS,
-                            "placeholder": _txt("Regioni (vuoto = le stesse di sopra)"),
+                            "placeholder": _txt("Nessuna regione"),
                             "options": region_options()}
     if u.all_regions:
         all_regions_el["initial_options"] = [_region_option(r) for r in u.all_regions if r in REGIONS or r == MOTORWAYS]
     all_provinces_el: dict = {"type": "multi_static_select", "action_id": A_ALL_PROVINCES,
-                              "placeholder": _txt("Province (vuoto = le stesse di sopra)"),
+                              "placeholder": _txt("Nessuna provincia"),
                               "option_groups": province_option_groups()}
     if u.all_provinces:
         all_provinces_el["initial_options"] = [_province_option(p) for p in u.all_provinces if p in PROVINCE_BY_CODE]
@@ -139,8 +139,10 @@ def preferences_modal(user: User | None) -> dict:
             {"type": "divider"},
             {"type": "section", "text": {"type": "mrkdwn", "text":
                 "*🚧 Zone per le altre ordinanze* (solo se le hai accese sopra)\n"
-                "Lascia vuoto per usare le stesse zone. Oppure restringile: per esempio chiusure di tutta Italia, "
-                "ma cantieri e restringimenti solo della tua provincia."}},
+                "Qui scegli dove ricevere cantieri e restringimenti, anche diverso da sopra: per esempio "
+                "chiusure di tutta Italia, ma cantieri solo della tua provincia. Valgono *solo* le zone che "
+                "scegli qui (una regione comprende già tutte le sue province). Se lasci vuoti *sia* regioni "
+                "*sia* province, valgono le zone di sopra."}},
             {"type": "input", "block_id": B_ALL_REGIONS, "optional": True, "label": _txt("🗺️ Regioni"),
              "element": all_regions_el},
             {"type": "input", "block_id": B_ALL_PROVINCES, "optional": True, "label": _txt("📍 Province"),
@@ -193,7 +195,7 @@ def _access_title(kind: str) -> str:
         return "ACCESSO CHIUSO"
     if " e " in kind:
         return kind.upper() + " CHIUSI"
-    feminine = kind in ("rampa", "area di servizio")
+    feminine = kind in ("rampa", "area di servizio", "complanare", "controstrada")
     return kind.upper() + (" CHIUSA" if feminine else " CHIUSO")
 
 

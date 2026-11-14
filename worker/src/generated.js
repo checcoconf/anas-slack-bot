@@ -1505,7 +1505,7 @@ export default {
     "type": "section",
     "text": {
      "type": "mrkdwn",
-     "text": "*🚧 Zone per le altre ordinanze* (solo se le hai accese sopra)\nLascia vuoto per usare le stesse zone. Oppure restringile: per esempio chiusure di tutta Italia, ma cantieri e restringimenti solo della tua provincia."
+     "text": "*🚧 Zone per le altre ordinanze* (solo se le hai accese sopra)\nQui scegli dove ricevere cantieri e restringimenti, anche diverso da sopra: per esempio chiusure di tutta Italia, ma cantieri solo della tua provincia. Valgono *solo* le zone che scegli qui (una regione comprende già tutte le sue province). Se lasci vuoti *sia* regioni *sia* province, valgono le zone di sopra."
     }
    },
    {
@@ -1522,7 +1522,7 @@ export default {
      "action_id": "all_regions",
      "placeholder": {
       "type": "plain_text",
-      "text": "Regioni (vuoto = le stesse di sopra)",
+      "text": "Nessuna regione",
       "emoji": true
      },
      "options": [
@@ -1711,7 +1711,7 @@ export default {
      "action_id": "all_provinces",
      "placeholder": {
       "type": "plain_text",
-      "text": "Province (vuoto = le stesse di sopra)",
+      "text": "Nessuna provincia",
       "emoji": true
      },
      "option_groups": [

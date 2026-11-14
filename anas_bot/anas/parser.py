@@ -90,7 +90,8 @@ PARTIAL_PHRASES = (
 # Accessi laterali: la chiusura si segnala come "svincolo chiuso" (o rampa, o area di servizio), la strada resta aperta.
 ACCESS_PHRASES = ("rampa", "svincolo", "area di servizio", "stazione di servizio")
 _ACCESS_KINDS = (("area di servizio", "area di servizio"), ("stazione di servizio", "area di servizio"),
-                 ("svincolo", "svincolo"), ("rampa", "rampa"))
+                 ("svincolo", "svincolo"), ("rampa", "rampa"), ("complanare", "complanare"),
+                 ("controstrada", "controstrada"))
 
 
 def access_kind(text: str) -> str:
