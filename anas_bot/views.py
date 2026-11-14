@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from datetime import date
 
+from .fonti import SOURCE_LABELS, SOURCE_LINK_TEXT
 from .anas.parser import CLOSURE, OTHER, REOPENING, SPEED, Ordinanza
 from .db import User
 from .geo import MOTORWAYS, MOTORWAYS_LABEL, PROVINCE_BY_CODE, REGIONS, provinces_of_region
@@ -195,7 +196,7 @@ def _access_title(kind: str) -> str:
         return "ACCESSO CHIUSO"
     if " e " in kind:
         return kind.upper() + " CHIUSI"
-    feminine = kind in ("rampa", "area di servizio", "complanare", "controstrada")
+    feminine = kind in ("rampa", "area di servizio", "complanare", "controstrada", "carreggiata")
     return kind.upper() + (" CHIUSA" if feminine else " CHIUSO")
 
 
@@ -246,7 +247,12 @@ def ordinanza_blocks(o: Ordinanza) -> list[dict]:
 
     if o.start_date:
         when = f"📅 dal {_fmt_date(o.start_date)}"
-        when += f" al {_fmt_date(o.end_date)}" if o.end_date else "  ♾️ fino a nuova disposizione"
+        if o.end_date:
+            when += f" al {_fmt_date(o.end_date)}"
+        elif not o.source or o.open_ended:
+            when += "  ♾️ fino a nuova disposizione"
+        else:
+            when += " (fine non indicata)"
         lines.append(when)
     elif o.open_ended:
         lines.append("📅 ♾️ fino a nuova disposizione")
@@ -260,11 +266,12 @@ def ordinanza_blocks(o: Ordinanza) -> list[dict]:
     section: dict = {"type": "section", "text": {"type": "mrkdwn", "text": "\n".join(lines)[:2900]}}
     if o.pdf_url:
         section["accessory"] = {"type": "button", "action_id": f"{ACTION_OPEN_PDF_PREFIX}{o.ord_id}",
-                                "text": _txt("📄 Apri PDF"), "url": o.pdf_url}
+                                "text": _txt(SOURCE_LINK_TEXT.get(o.source, "📄 Apri PDF")), "url": o.pdf_url}
+    footer = (f"📡 Fonte: {SOURCE_LABELS[o.source]}" if o.source in SOURCE_LABELS and o.source
+              else f"🏛️ Ordinanza {num}" + (f" · {o.structure}" if o.structure else ""))
     return [
         section,
-        {"type": "context", "elements": [{"type": "mrkdwn", "text":
-            f"🏛️ Ordinanza {num}" + (f" · {o.structure}" if o.structure else "")}]},
+        {"type": "context", "elements": [{"type": "mrkdwn", "text": footer}]},
         {"type": "divider"},
     ]
 
@@ -290,10 +297,12 @@ def digest_messages(ords: list[Ordinanza], total: int, per_message: int = 15,
     parts = (n - 1) // per_message + 1
     for i in range(0, n, per_message):
         chunk = ords[i:i + per_message]
+        what = "" if any(o.source for o in ords) else " ANAS"  # con Bolzano/A22: "ordinanze e avvisi"
+        noun_one, noun_many = ("ordinanza", "ordinanze") if what else ("ordinanza o avviso", "ordinanze e avvisi")
         if kind == "cantieri":
-            title = f"🚧 {total} altr{'a ordinanza' if total == 1 else 'e ordinanze'} ANAS in vigore nelle zone scelte"
+            title = f"🚧 {total} altr{'a ' + noun_one if total == 1 else 'e ' + noun_many}{what} in vigore nelle zone scelte"
         else:
-            title = f"📋 {total} ordinanz{'a' if total == 1 else 'e'} ANAS in vigore nelle tue zone"
+            title = f"📋 {total} {noun_one if total == 1 else noun_many}{what} in vigore nelle tue zone"
         if parts > 1:
             title += f" ({i // per_message + 1}/{parts})"
         note = (f"Le {n} più recenti; le altre {total - n} su <{ORDINANZE_WEB_URL}|Ordinanze Web>."
@@ -318,7 +327,10 @@ def notification_messages(ords: list[Ordinanza], per_message: int = 15) -> list[
     n = len(ords)
     for i in range(0, n, per_message):
         chunk = ords[i:i + per_message]
-        title = "🚧 1 nuova ordinanza ANAS" if n == 1 else f"🚧 {n} nuove ordinanze ANAS"
+        if any(o.source for o in ords):  # ci sono anche avvisi di Bolzano o dell'A22
+            title = "🚧 1 nuovo avviso stradale" if n == 1 else f"🚧 {n} nuovi avvisi stradali"
+        else:
+            title = "🚧 1 nuova ordinanza ANAS" if n == 1 else f"🚧 {n} nuove ordinanze ANAS"
         if n > per_message:
             title += f" ({i // per_message + 1}/{(n - 1) // per_message + 1})"
         counts = {c: sum(o.category == c for o in chunk) for c in _SHORT}

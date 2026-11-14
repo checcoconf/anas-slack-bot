@@ -45,6 +45,8 @@ class Config:
     # "CANALE=zona,zona;CANALE=zona" con zone = autostrade | italia | regione (es. sicilia) | provincia (es. PA).
     # Il bot deve essere membro del canale (/invite @anas-bot). Esempio: "C03EYL07SL9=autostrade".
     channel_subscriptions: str = ""
+    # Fonti oltre ANAS (anas_bot/fonti): "bz" Provincia di Bolzano, "a22" Autostrada del Brennero. "no" = nessuna
+    fonti: str = "bz,a22"
 
     # Database: Cloudflare D1 (produzione) oppure file SQLite locale (prove sul PC)
     cf_account_id: str = ""
@@ -96,6 +98,12 @@ class Config:
     welcome_existing_members: bool = True
     unknown_province_fallback: bool = True
 
+    def enabled_sources(self) -> list[str]:
+        """Le fonti oltre ANAS da leggere: "bz,a22" -> ["bz", "a22"]; "no" (o vuoto) -> nessuna."""
+        if self.fonti.strip().lower() in ("", "no", "off", "nessuna"):
+            return []
+        return [f for f in (x.strip().lower() for x in self.fonti.split(",")) if f in ("bz", "a22")]
+
     def is_deep_hour(self, hour: int) -> bool:
         """True se l'ora locale (0-23) cade nella fascia della lettura profonda, es. "0-6" oppure "22-6"."""
         try:
@@ -116,6 +124,7 @@ class Config:
         c.admin_channel_id = _str("ADMIN_CHANNEL_ID", "")
         c.admin_slack_bot_token = _str("ADMIN_SLACK_BOT_TOKEN", "")
         c.channel_subscriptions = os.environ.get("CHANNEL_SUBSCRIPTIONS", "").strip()
+        c.fonti = _str("FONTI", c.fonti)
         c.cf_account_id = _str("CF_ACCOUNT_ID", "")
         c.cf_d1_database_id = _str("CF_D1_DATABASE_ID", "")
         c.cf_api_token = _str("CF_API_TOKEN", "")

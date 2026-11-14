@@ -15,8 +15,9 @@ display_information:
     ordinanze (cantieri, corsie ridotte, sensi unici alternati...) nelle zone che sceglie per quelle.
     Appena scelte le zone arriva il riepilogo delle ordinanze già in vigore, poi solo le novità.
     Per attivarlo basta aprire la scheda Home dell'app e scegliere le zone; per fermarlo, metterlo in pausa
-    dalla stessa scheda. Le chiusure autostradali arrivano anche nel canale dedicato. Non legge nessun messaggio.
-    I dati ANAS sono pubblici; l'app conserva solo l'ID Slack e le zone scelte da chi la attiva.
+    dalla stessa scheda. Le chiusure autostradali arrivano anche nel canale dedicato. Per l'Alto Adige e l'A22
+    arrivano anche gli avvisi della Centrale Viabilità della Provincia di Bolzano e dell'Autostrada del Brennero.
+    Non legge nessun messaggio. I dati ANAS, della Provincia di Bolzano e dell'A22 sono pubblici; l'app conserva solo l'ID Slack e le zone scelte da chi la attiva.
     Ideata e sviluppata da Francesco Conforti (checcoconf) per la community Waze Italia.
     Codice sorgente: https://github.com/checcoconf/anas-slack-bot
   background_color: "#1f3a5f"

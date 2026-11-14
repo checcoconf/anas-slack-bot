@@ -129,7 +129,7 @@ export function homeView(u) {
     });
   }
   blocks.push({ type: "actions", elements: buttons });
-  blocks.push({ type: "context", elements: [{ type: "mrkdwn", text: `📄 Fonte: ordinanze pubblicate da ANAS S.p.A. Controlla sempre il PDF prima di modificare la mappa.\n${G.betaNotice}` }] });
+  blocks.push({ type: "context", elements: [{ type: "mrkdwn", text: `📄 Fonti: ordinanze di ANAS S.p.A.; in Alto Adige anche la Centrale Viabilità della Provincia di Bolzano e l'Autostrada del Brennero (A22). Controlla sempre la fonte prima di modificare la mappa.\n${G.betaNotice}` }] });
   blocks.push({ type: "context", elements: [{ type: "mrkdwn", text: G.credit }] });
   return { type: "home", blocks };
 }

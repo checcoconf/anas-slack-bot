@@ -128,6 +128,26 @@ Scheda **Variables** (*New repository variable*):
 - **Stesso workspace:** cambia la variable `SLACK_CHANNEL_IDS` con l'ID del canale vero, invita il bot nel canale e rilancia *Actions → Pubblica Worker (Cloudflare)*.
 - **Workspace diverso** (per esempio il tuo di prova → Waze Italia): crea l'app anche lì dallo stesso manifest, poi aggiorna `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET` e `SLACK_CHANNEL_IDS` e rilancia *Pubblica Worker (Cloudflare)*. Gli iscritti del canale di test non vengono trasferiti.
 
+## Altre fonti: Provincia di Bolzano e A22
+
+Oltre alle ordinanze ANAS, a ogni giro il bot legge due fonti pubbliche (due richieste in tutto, nessuna verso
+ANAS, quindi nessun effetto sul tetto delle 10 richieste l'ora). Codice in `anas_bot/fonti/`.
+
+- **Centrale Viabilità della Provincia di Bolzano**: feed RSS ufficiale in italiano
+  (`static-traffico.provincia.bz.it/publications/rss/tutte-le-categorie.xml`). Chiusure (scritte in maiuscolo
+  nel bollettino: CHIUSA, CHIUSURA NOTTURNA, CHIUSURA INVERNALE) come ⛔; sensi unici alternati, "chiusure
+  temporanee fino a 15 minuti", divieti per categorie come "altre ordinanze". Ciclabili, treni, bus e notizie
+  fuori provincia si scartano. Zona: provincia di Bolzano.
+- **Autostrada del Brennero (A22)**: gli avvisi della pagina "Viabilità > Avvisi", letti dal JSON che la pagina
+  usa (`/api/MapApi/GetAvvisi`). Scambio di carreggiata = chiusura della carreggiata (regola Waze); "deviazione
+  di carreggiata con 2 flussi" = chiusura *da verificare*; svincoli/caselli chiusi = chiusura dell'accesso;
+  GPL e colonnine SOS si scartano. Zona: provincia ricavata dai km, e "Autostrade" per chi le segue.
+
+Al primo giro tutto ciò che è già pubblicato viene registrato senza avvisare (come le ordinanze ANAS in vigore
+all'installazione); poi arrivano solo le novità. Un avviso che sparisce dalla fonte è concluso: non compare più
+nei riepiloghi. Se una fonte non risponde per 6 giri di fila l'admin riceve un avviso; ANAS continua comunque.
+Variabile `FONTI` (facoltativa): `bz,a22` (predefinito), `bz`, `a22`, oppure `no`.
+
 ## Per gli utenti
 
 Gli utenti non installano nulla:

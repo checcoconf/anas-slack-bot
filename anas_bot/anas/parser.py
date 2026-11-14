@@ -241,6 +241,7 @@ class Ordinanza:
     uncertain: bool = False
     uncertain_why: str = ""
     listing_record: dict = field(default_factory=dict)  # il risultato grezzo dell'elenco, per rileggere a posteriori
+    source: str = ""  # "" = ANAS; "bz" = Provincia di Bolzano, "a22" = Autostrada del Brennero (anas_bot/fonti)
 
     def to_dict(self) -> dict:
         return asdict(self)

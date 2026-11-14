@@ -63,6 +63,7 @@ jobs:
           MAX_PDF_PER_RUN_DAY: ${{ vars.MAX_PDF_PER_RUN_DAY }}
           MAX_REQUESTS_PER_HOUR: ${{ vars.MAX_REQUESTS_PER_HOUR }}
           CHANNEL_SUBSCRIPTIONS: ${{ vars.CHANNEL_SUBSCRIPTIONS }}
+          FONTI: ${{ vars.FONTI }}  # vuota = bz,a22 (Provincia di Bolzano e A22); "no" per spegnerle
           BLOCK_PAUSE_MINUTES: ${{ vars.BLOCK_PAUSE_MINUTES }}
           JOB_TIME_BUDGET_MINUTES: ${{ vars.JOB_TIME_BUDGET_MINUTES }}
           LISTING_DEEP_PAGES: ${{ vars.LISTING_DEEP_PAGES }}

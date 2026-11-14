@@ -312,6 +312,20 @@ class Database:
         rows = self.b.query("SELECT ord_id FROM ordinanze WHERE ord_id BETWEEN ? AND ?", (lo, hi))
         return {int(r["ord_id"]) for r in rows}
 
+    def open_ids_in_range(self, lo: int, hi: int, today: date) -> set[int]:
+        """ID in [lo, hi) senza fine o con fine da oggi in poi (avvisi delle fonti oltre ANAS ancora attivi)."""
+        rows = self.b.query(
+            "SELECT ord_id FROM ordinanze WHERE ord_id >= ? AND ord_id < ? AND (json_extract(data, '$.end_date') "
+            "IS NULL OR json_extract(data, '$.end_date') = '' OR json_extract(data, '$.end_date') >= ?)",
+            (lo, hi, today.isoformat()))
+        return {int(r["ord_id"]) for r in rows}
+
+    def end_ordinanze(self, ord_ids: list[int], end: date) -> None:
+        """Segna come finiti questi avvisi (spariti dalla fonte): fine = `end`, niente "senza fine"."""
+        if ord_ids:
+            self.b.batch([("UPDATE ordinanze SET data = json_set(data, '$.end_date', ?, '$.open_ended', json('false')) "
+                           "WHERE ord_id = ?", (end.isoformat(), i)) for i in ord_ids])
+
     def get_ordinanza(self, ord_id: int) -> Ordinanza | None:
         rows = self.b.query("SELECT data FROM ordinanze WHERE ord_id=?", (ord_id,))
         return ordinanza_from_json(rows[0]["data"]) if rows else None

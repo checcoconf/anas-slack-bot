@@ -36,6 +36,7 @@ from .membership import Membership, build_web_client
 from .digest import Digest
 from .notifier import Notifier, channel_subscribers
 from .listing_poller import BLOCKED_UNTIL, ListingPoller
+from .fonti.poller import FontiPoller
 from .poller import PdfSource, Poller
 
 log = logging.getLogger("anas_bot")
@@ -107,6 +108,20 @@ def run(cfg: Config, db: Database, client, source, listing=None, started: float 
         digests = 0
     if digests:
         log.info("Riepilogo delle ordinanze in vigore mandato a %d iscritti", digests)
+
+    # 0) Fonti oltre ANAS (Provincia di Bolzano, A22): due richieste, mai verso ANAS, mai bloccanti
+    if cfg.enabled_sources():
+        try:
+            fres = FontiPoller(db, cfg.enabled_sources(), cfg.anas_user_agent).run(today)
+            for text in fres.alerts:
+                admin(client, cfg, text)
+            if any(fres.new.values()):
+                nres = notifier.run(today)
+                sent += nres.messages_sent
+                users += nres.users_notified
+                channel_errors.update(nres.channel_errors)
+        except Exception as exc:  # noqa: BLE001 - le fonti esterne non devono mai fermare il giro ANAS
+            log.warning("Fonti oltre ANAS saltate in questo giro: %s", exc)
 
     # 1) Elenco ufficiale di Ordinanze Web: la fonte principale
     lres = None
