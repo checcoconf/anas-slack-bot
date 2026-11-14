@@ -75,26 +75,33 @@ class FontiPoller:
                 res.alerts.append(f"✅ Fonte *{SOURCE_LABELS[source]}* di nuovo leggibile.")
             self.db.set(fail_key, "0")
 
-            seeded_key = f"fonte_{source}_seeded"
-            first = self.db.get(seeded_key) != "1"
-            known = self.db.known_among([o.ord_id for o in items])
-            unseen = [o for o in items if o.ord_id not in known]
-            new = [o for o in unseen if not o.is_expired(today)]
-            for o in unseen:  # già scaduti: registrati in silenzio, così non si ripropongono a ogni giro
-                self.db.save_ordinanza(o, o.excerpt, silent=first or o.is_expired(today))
-            # avvisi spariti dalla fonte: sono finiti (la fonte li toglie a lavori conclusi). Senza questo
-            # resterebbero "in vigore" per sempre e finirebbero nel riepilogo dei nuovi iscritti.
-            lo = ID_OFFSET[source]
-            gone = self.db.open_ids_in_range(lo, lo + 1_000_000_000, today) - {o.ord_id for o in items}
-            if gone and items:  # una risposta vuota non chiude niente: potrebbe essere un guasto della fonte
-                self.db.end_ordinanze(sorted(gone), today - timedelta(days=1))
-                log.info("Fonte %s: %d avvisi conclusi (non più pubblicati)", SOURCE_LABELS[source], len(gone))
-            if first:
-                self.db.set(seeded_key, "1")
-                res.silent[source] = len(unseen)
-            else:
-                res.new[source] = len(new)
-            log.info("Fonte %s: %d avvisi utili, %d nuovi%s", SOURCE_LABELS[source], len(items),
-                     len(unseen) if first else len(new),
-                     " (primo giro: registrati senza avvisare)" if first else "")
+            try:
+                self._store(source, items, today, res)
+            except Exception as exc:  # noqa: BLE001
+                res.errors[source] = f"{type(exc).__name__}: {exc}"[:300]
+                log.warning("Fonte %s letta ma non salvata: %s", SOURCE_LABELS[source], res.errors[source])
         return res
+
+    def _store(self, source: str, items, today: date, res: FontiResult) -> None:
+        seeded_key = f"fonte_{source}_seeded"
+        first = self.db.get(seeded_key) != "1"
+        known = self.db.known_among([o.ord_id for o in items])
+        unseen = [o for o in items if o.ord_id not in known]
+        new = [o for o in unseen if not o.is_expired(today)]
+        for o in unseen:  # già scaduti: registrati in silenzio, così non si ripropongono a ogni giro
+            self.db.save_ordinanza(o, o.excerpt, silent=first or o.is_expired(today))
+        # avvisi spariti dalla fonte: sono finiti (la fonte li toglie a lavori conclusi). Senza questo
+        # resterebbero "in vigore" per sempre e finirebbero nel riepilogo dei nuovi iscritti.
+        lo = ID_OFFSET[source]
+        gone = self.db.open_ids_in_range(lo, lo + 1_000_000_000, today) - {o.ord_id for o in items}
+        if gone and items:  # una risposta vuota non chiude niente: potrebbe essere un guasto della fonte
+            self.db.end_ordinanze(sorted(gone), today - timedelta(days=1))
+            log.info("Fonte %s: %d avvisi conclusi (non più pubblicati)", SOURCE_LABELS[source], len(gone))
+        if first:
+            self.db.set(seeded_key, "1")
+            res.silent[source] = len(unseen)
+        else:
+            res.new[source] = len(new)
+        log.info("Fonte %s: %d avvisi utili, %d nuovi%s", SOURCE_LABELS[source], len(items),
+                 len(unseen) if first else len(new),
+                 " (primo giro: registrati senza avvisare)" if first else "")

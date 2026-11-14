@@ -195,3 +195,32 @@ def test_notices_removed_by_the_source_are_closed(tmp_path):
     pages[a22.API_URL] = "[]"
     _poller(db, pages).run(date(2026, 11, 18))
     assert db.get_ordinanza(ID_OFFSET["a22"] + 627438).end_date == "2026-11-23"
+
+
+def test_many_notices_respect_the_d1_variable_limit(tmp_path):
+    """14/11/2026, primo giro reale: ~120 avvisi di Bolzano in un solo IN (...) e Cloudflare D1 rifiuta
+    ("too many SQL variables", max 100). Qui un database che rifiuta come D1 e un bollettino da 250 avvisi."""
+    from anas_bot.db import LocalSqlite
+
+    class LikeD1(LocalSqlite):
+        def query(self, sql, params=()):
+            assert len(params) <= 100, f"query con {len(params)} variabili"
+            return super().query(sql, params)
+
+        def batch(self, stmts):
+            for _, params in stmts:
+                assert len(params) <= 100
+            return super().batch(stmts)
+
+    db = Database(LikeD1(str(tmp_path / "d1.sqlite3")))
+    items = "".join(
+        f'<item><title>SS12 dell\'Abetone e del Brennero</title><guid isPermaLink="false">{4000000 + i * 100 + 12}</guid>'
+        f'<description>A Laives (km {i},100 - km {i},300) senso unico alternato per lavori.</description>'
+        f'<category>Cantieri stradali / Chiusure</category><pubDate>Mon, 16 Nov 2026 00:00:00 GMT</pubDate></item>'
+        for i in range(250))
+    feed = BZ_XML.replace("</channel>", items + "</channel>")
+    r = _poller(db, {bolzano.FEED_URL: feed, a22.API_URL: A22_JSON}).run(date(2026, 11, 14))
+    assert r.errors == {} and r.silent["bz"] > 250 and r.silent["a22"] == 3
+    r = _poller(db, {bolzano.FEED_URL: feed, a22.API_URL: A22_JSON}).run(date(2026, 11, 14))
+    assert r.errors == {} and r.new == {"bz": 0, "a22": 0}
+    assert len(db.get_ordinanze([ID_OFFSET["bz"] + 40000 + i for i in range(250)])) == 250

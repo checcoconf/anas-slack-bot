@@ -79,6 +79,9 @@ def schema_statements() -> list[str]:
 
 
 MAX_STORED_TEXT = 20_000  # caratteri di testo PDF conservati per rianalisi
+# Cloudflare D1 accetta al massimo 100 valori "?" per query (14/11/2026: "too many SQL variables" con ~120 avvisi
+# di Bolzano in un IN (...)); in locale il limite è molto più alto, quindi lo si rispetta sempre.
+MAX_SQL_VARS = 90
 
 Stmt = tuple[str, tuple[Any, ...]]
 
@@ -280,12 +283,14 @@ class Database:
         self.b.batch(stmts)
 
     def known_among(self, ids: list[int]) -> set[int]:
-        """Quali di questi ord_id sono già nel database (una query)."""
-        if not ids:
-            return set()
-        marks = ",".join("?" * len(ids))
-        rows = self.b.query(f"SELECT ord_id FROM ordinanze WHERE ord_id IN ({marks})", tuple(ids))
-        return {int(r["ord_id"]) for r in rows}
+        """Quali di questi ord_id sono già nel database (una query ogni MAX_SQL_VARS id)."""
+        found: set[int] = set()
+        for i in range(0, len(ids), MAX_SQL_VARS):
+            chunk = ids[i:i + MAX_SQL_VARS]
+            marks = ",".join("?" * len(chunk))
+            rows = self.b.query(f"SELECT ord_id FROM ordinanze WHERE ord_id IN ({marks})", tuple(chunk))
+            found |= {int(r["ord_id"]) for r in rows}
+        return found
 
     def find_by_number(self, number: str) -> Ordinanza | None:
         """L'ordinanza con questo numero (es. "650/2026/BA"), se il bot l'ha già vista."""
@@ -331,11 +336,12 @@ class Database:
         return ordinanza_from_json(rows[0]["data"]) if rows else None
 
     def get_ordinanze(self, ord_ids: list[int]) -> list[Ordinanza]:
-        if not ord_ids:
-            return []
-        marks = ",".join("?" * len(ord_ids))
-        rows = self.b.query(f"SELECT data FROM ordinanze WHERE ord_id IN ({marks}) ORDER BY ord_id", tuple(ord_ids))
-        return [ordinanza_from_json(r["data"]) for r in rows]
+        rows: list[dict] = []
+        for i in range(0, len(ord_ids), MAX_SQL_VARS):
+            chunk = ord_ids[i:i + MAX_SQL_VARS]
+            marks = ",".join("?" * len(chunk))
+            rows += self.b.query(f"SELECT data FROM ordinanze WHERE ord_id IN ({marks})", tuple(chunk))
+        return sorted((ordinanza_from_json(r["data"]) for r in rows), key=lambda o: o.ord_id)
 
     def in_force_ordinanze(self, today: date, categories: tuple[str, ...] = RELEVANT) -> list[Ordinanza]:
         """Ordinanze ancora in vigore (per il riepilogo a chi si iscrive), già valutate dalla coda (1, 2) o già
