@@ -1,4 +1,4 @@
-"""Fonti oltre ANAS: Provincia di Bolzano (RSS) e A22 (JSON), su dati reali del 14/11/2026."""
+"""Fonti oltre ANAS: Provincia di Bolzano (JSON del bollettino) e A22 (JSON), su dati reali del 14/11/2026."""
 
 from __future__ import annotations
 
@@ -8,59 +8,64 @@ from pathlib import Path
 
 import pytest
 
-from anas_bot.anas.parser import CLOSURE, OTHER
+from anas_bot.anas.parser import CLOSURE
 from anas_bot.db import Database
 from anas_bot.fonti import ID_OFFSET, a22, bolzano
 from anas_bot.fonti.poller import FAIL_ALERT_RUNS, FontiPoller
 from anas_bot.views import ordinanza_blocks, title_line
 
 FIX = Path(__file__).parent / "fixtures"
-BZ_XML = (FIX / "bz_feed.xml").read_text(encoding="utf-8")
+BZ_JSON = (FIX / "bz_traffic.json").read_text(encoding="utf-8")
 A22_JSON = (FIX / "a22_avvisi.json").read_text(encoding="utf-8")
 
 
 def _bz() -> dict[int, object]:
-    return {o.ord_id - ID_OFFSET["bz"]: o for o in bolzano.parse_feed(BZ_XML)}
+    return {o.ord_id - ID_OFFSET["bz"]: o for o in bolzano.parse_traffic(json.loads(BZ_JSON))}
+
+
+def _bz_with(*extra: dict) -> str:
+    return json.dumps(json.loads(BZ_JSON) + list(extra), ensure_ascii=False)
 
 
 # --- Bolzano -------------------------------------------------------------------------------------------
 
-def test_bz_skips_what_is_not_for_the_map():
+def test_bz_only_closures():
+    """Solo chiusure: cantieri e sensi unici la Provincia li inserisce già da sé in Waze (indicazione dello SM)."""
     got = _bz()
-    assert 5873 not in got       # "Nessuna limitazione"
-    assert 5739 not in got       # percorso ciclabile
-    assert 5778 not in got       # fuori provincia (Grigioni)
-    assert 28788 not in got      # ferrovia
-    assert 27227 not in got      # riepilogo generico "Strade di montagna alte e passi:"
+    assert set(got) == {29025, 30717, 31559, 30575, 31611, 30351, 6098, 5871, 31385}
+    assert all(o.category == CLOSURE for o in got.values())
+    # scartati: "Nessuna limitazione" (6853), riepilogo "Strade di montagna alte e passi:" (27227), ferrovia
+    # (28788), funicolare (27316), Austria (30675), SS42 Mendola-Ronzone fuori Alto Adige (31601), pista
+    # ciclabile (27200), sensi unici alternati e "chiusure temporanee di 10 minuti" (27428, 28829, 28493),
+    # divieto per autobus e mezzi pesanti (5877)
 
 
 def test_bz_same_news_in_two_categories_is_one_notice():
-    got = _bz()
-    o = got[30717]  # via delle Palade: in "Situazione attuale" (…01) e in "Cantieri" (…12)
-    assert sum(1 for k in got if k == 30717) == 1
-    assert o.category == CLOSURE
+    o = _bz()[30717]  # via delle Palade: in "Situazione attuale" (…01) e in "Cantieri" (…12)
     assert o.roads == ["Comune di Merano"]
     assert (o.km_from, o.km_to) == ("37+150", "37+250")
-    assert o.end_date == "2026-11-16" and o.provinces == ["BZ"] and o.regions == ["trentino-alto-adige"]
+    assert (o.start_date, o.end_date) == ("2026-11-06", "2026-11-16")
+    assert o.provinces == ["BZ"] and o.regions == ["trentino-alto-adige"]
 
 
-def test_bz_closures_and_other_notices():
+def test_bz_dates_roads_and_hours():
     got = _bz()
     stelvio = got[5871]
-    assert stelvio.category == CLOSURE and stelvio.roads == ["SS38"] and stelvio.open_ended
-    assert stelvio.start_date == "2026-10-22" and stelvio.km_from == "124+300"
+    assert stelvio.roads == ["SS38"] and stelvio.road_names == {"SS38": "Passo dello Stelvio"}
+    assert stelvio.open_ended and not stelvio.end_date and stelvio.start_date == "2026-10-22"
+    assert stelvio.km_from == "124+300" and stelvio.excerpt.startswith("Chiusura invernale.")
+    assert got[6098].roads == ["SS44bis"]
+    assert got[29025].roads == ["SP104"] and got[29025].road_names == {"SP104": "Laudes"}
     naturno = got[30575]
-    assert naturno.category == CLOSURE and naturno.time_window == "19:00-06:00"
-    merano = got[31559]  # "Da martedì 17.11.2026 - ore 00:00: ... CHIUSURA ininterrotta"
-    assert merano.category == CLOSURE and merano.start_date == "2026-11-17"
-    assert not merano.end_date and not merano.open_ended  # fine non detta: niente "fino a nuova disposizione"
-    inaug = got[31611]   # "da sabato 21.11.2026 ... a domenica 22.11.2026"
-    assert (inaug.start_date, inaug.end_date) == ("2026-11-21", "2026-11-22")
-    # sensi unici alternati, "chiusure temporanee fino a 15 minuti", divieti per categorie: non chiusure
-    assert got[28615].category == OTHER and got[28615].roads == ["SP3"]
-    assert got[31249].category == OTHER
-    assert got[5878].category == OTHER
-    assert got[31498].category == OTHER and got[31498].roads == ["SS44"]
+    assert naturno.time_window == "19:00-06:00" and (naturno.start_date, naturno.end_date) == ("2026-11-17", "2026-11-18")
+    luson = got[31385]  # chiusa per maltempo, fine non detta: niente "fino a nuova disposizione"
+    assert not luson.end_date and not luson.open_ended
+    assert got[30351].excerpt.startswith("Per la manifestazione „Krampuslauf“")  # UTF-8 intatto
+
+
+def test_bz_unexpected_answer_is_an_error():
+    with pytest.raises(ValueError):
+        bolzano.parse_traffic({"errore": "manutenzione"})
 
 
 # --- A22 -------------------------------------------------------------------------------------------------
@@ -109,13 +114,24 @@ def test_messages_name_the_source_and_link_the_page():
     text = json.dumps(blocks, ensure_ascii=False)
     assert "Centrale Viabilità Provincia di Bolzano" in text and "Apri il bollettino" in text
     assert "Ordinanza" not in blocks[1]["elements"][0]["text"]
+    # link a WME sul punto della chiusura (coordinate del bollettino)
+    assert "waze.com/it/editor?env=row&lat=46.658459&lon=11.146507&zoomLevel=18|📍 Apri in WME" in text
+    assert "Apri in WME" not in json.dumps(ordinanza_blocks(_a22()[627438]), ensure_ascii=False)  # A22: niente coordinate
+
+
+def test_the_zone_form_explains_alto_adige_sources():
+    from anas_bot.views import preferences_modal
+    text = json.dumps(preferences_modal(None), ensure_ascii=False)
+    assert "Alto Adige e A22" in text and bolzano.PAGE_URL in text and a22.PAGE_URL in text
 
 
 # --- giro ------------------------------------------------------------------------------------------------
 
 class _Resp:
+    """Come requests senza charset dichiarato: .text decodificato in latin-1, .content i byte veri."""
     def __init__(self, text: str) -> None:
-        self.text = text
+        self.content = text.encode("utf-8")
+        self.text = self.content.decode("latin-1")
 
 
 def _poller(db, pages: dict[str, str]):
@@ -128,17 +144,17 @@ def _poller(db, pages: dict[str, str]):
 
 def test_first_run_is_silent_then_only_news(tmp_path):
     db = Database.local(str(tmp_path / "f.sqlite3"))
-    pages = {bolzano.FEED_URL: BZ_XML, a22.API_URL: A22_JSON}
+    pages = {bolzano.FEED_URL: BZ_JSON, a22.API_URL: A22_JSON}
     r = _poller(db, pages).run(date(2026, 11, 14))
     assert r.new == {} and r.silent["bz"] > 0 and r.silent["a22"] == 3
     assert db.pending_ordinanze() == []  # niente valanga al primo giro
 
-    # una chiusura nuova nel feed: solo quella è una novità
-    extra = ('<item><title>SS12 dell\'Abetone e del Brennero</title><guid isPermaLink="false">3170012</guid>'
-             '<description>A Laives (km 420,100 - km 420,300) CHIUSURA al traffico dalle ore 21:00 alle ore 05:00 '
-             'per lavori.</description><category>Cantieri stradali / Chiusure</category>'
-             '<pubDate>Mon, 16 Nov 2026 00:00:00 GMT</pubDate></item>')
-    pages[bolzano.FEED_URL] = BZ_XML.replace("</channel>", extra + "</channel>")
+    # una chiusura nuova nel bollettino: solo quella è una novità
+    pages[bolzano.FEED_URL] = _bz_with(
+        {"messageId": "3170012", "beginDate": "2026-11-16", "endDate": "2026-11-17", "messageGradId": "3",
+         "messageTypeId": "12", "messageZoneId": "4", "messageStreetNr": "SS12",
+         "messageStreetInternetDescIt": "dell'Abetone e del Brennero",
+         "placeIt": "A Laives (km 420,100 - km 420,300) CHIUSURA al traffico dalle ore 21:00 alle ore 05:00 per lavori."})
     r = _poller(db, pages).run(date(2026, 11, 14))
     assert r.new == {"bz": 1, "a22": 0}
     pending = db.pending_ordinanze()
@@ -148,7 +164,7 @@ def test_first_run_is_silent_then_only_news(tmp_path):
 
 def test_a_broken_source_never_stops_the_others_and_alerts_once(tmp_path):
     db = Database.local(str(tmp_path / "g.sqlite3"))
-    pages = {bolzano.FEED_URL: BZ_XML}  # A22 irraggiungibile
+    pages = {bolzano.FEED_URL: BZ_JSON}  # A22 irraggiungibile
     alerts = []
     for _ in range(FAIL_ALERT_RUNS + 1):
         r = _poller(db, pages).run(date(2026, 11, 14))
@@ -172,7 +188,7 @@ def test_sources_setting():
 
 def test_no_end_date_is_not_shown_as_until_further_notice():
     got = _bz()
-    text = json.dumps(ordinanza_blocks(got[31559]), ensure_ascii=False)
+    text = json.dumps(ordinanza_blocks(got[31385]), ensure_ascii=False)
     assert "fine non indicata" in text and "nuova disposizione" not in text
     winter = json.dumps(ordinanza_blocks(got[5871]), ensure_ascii=False)  # passo dello Stelvio d'inverno
     assert "nuova disposizione" in winter
@@ -180,14 +196,12 @@ def test_no_end_date_is_not_shown_as_until_further_notice():
 
 def test_notices_removed_by_the_source_are_closed(tmp_path):
     db = Database.local(str(tmp_path / "h.sqlite3"))
-    pages = {bolzano.FEED_URL: BZ_XML, a22.API_URL: A22_JSON}
+    pages = {bolzano.FEED_URL: BZ_JSON, a22.API_URL: A22_JSON}
     _poller(db, pages).run(date(2026, 11, 14))
     naturno = ID_OFFSET["bz"] + 30575
     assert any(o.ord_id == naturno for o in db.in_force_ordinanze(date(2026, 11, 18)))
     # la galleria di Naturno sparisce dal bollettino: lavori finiti
-    start = BZ_XML.index("<item><title>SS38 Strada statale Val Venosta")
-    stop = BZ_XML.index("</item>", start) + len("</item>")
-    pages[bolzano.FEED_URL] = BZ_XML[:start] + BZ_XML[stop:]
+    pages[bolzano.FEED_URL] = json.dumps([x for x in json.loads(BZ_JSON) if x["messageId"][:-2] != "30575"])
     _poller(db, pages).run(date(2026, 11, 18))
     assert db.get_ordinanza(naturno).end_date == "2026-11-17"
     assert not any(o.ord_id == naturno for o in db.in_force_ordinanze(date(2026, 11, 18)))
@@ -199,7 +213,7 @@ def test_notices_removed_by_the_source_are_closed(tmp_path):
 
 def test_many_notices_respect_the_d1_variable_limit(tmp_path):
     """14/11/2026, primo giro reale: ~120 avvisi di Bolzano in un solo IN (...) e Cloudflare D1 rifiuta
-    ("too many SQL variables", max 100). Qui un database che rifiuta come D1 e un bollettino da 250 avvisi."""
+    ("too many SQL variables", max 100). Qui un database che rifiuta come D1 e un bollettino da 250 chiusure."""
     from anas_bot.db import LocalSqlite
 
     class LikeD1(LocalSqlite):
@@ -213,12 +227,11 @@ def test_many_notices_respect_the_d1_variable_limit(tmp_path):
             return super().batch(stmts)
 
     db = Database(LikeD1(str(tmp_path / "d1.sqlite3")))
-    items = "".join(
-        f'<item><title>SS12 dell\'Abetone e del Brennero</title><guid isPermaLink="false">{4000000 + i * 100 + 12}</guid>'
-        f'<description>A Laives (km {i},100 - km {i},300) senso unico alternato per lavori.</description>'
-        f'<category>Cantieri stradali / Chiusure</category><pubDate>Mon, 16 Nov 2026 00:00:00 GMT</pubDate></item>'
-        for i in range(250))
-    feed = BZ_XML.replace("</channel>", items + "</channel>")
+    feed = _bz_with(*({"messageId": str(4000000 + i * 100 + 12), "beginDate": "2026-11-16", "endDate": "2026-11-30",
+                       "messageGradId": "3", "messageTypeId": "12", "messageZoneId": "4", "messageStreetNr": "SS12",
+                       "messageStreetInternetDescIt": "dell'Abetone e del Brennero",
+                       "placeIt": f"A Laives (km {i},100 - km {i},300) CHIUSURA al traffico per lavori."}
+                      for i in range(250)))
     r = _poller(db, {bolzano.FEED_URL: feed, a22.API_URL: A22_JSON}).run(date(2026, 11, 14))
     assert r.errors == {} and r.silent["bz"] > 250 and r.silent["a22"] == 3
     r = _poller(db, {bolzano.FEED_URL: feed, a22.API_URL: A22_JSON}).run(date(2026, 11, 14))
@@ -238,6 +251,22 @@ def test_bolzano_is_read_only_while_the_bulletin_is_updated(tmp_path):
 
     def get(url):
         asked.append(url)
-        return _Resp(BZ_XML if url == bolzano.FEED_URL else A22_JSON)
+        return _Resp(BZ_JSON if url == bolzano.FEED_URL else A22_JSON)
     FontiPoller(db, ["bz", "a22"], get=get).run(date(2026, 11, 14), datetime(2026, 11, 14, 2, 5))
     assert asked == [a22.API_URL]  # di notte solo l'A22, che pubblica a ogni ora
+
+
+def test_changed_notices_are_updated_without_a_new_message(tmp_path):
+    db = Database.local(str(tmp_path / "u.sqlite3"))
+    pages = {bolzano.FEED_URL: BZ_JSON, a22.API_URL: A22_JSON}
+    _poller(db, pages).run(date(2026, 11, 14))
+    # la Provincia sposta la fine della galleria di Naturno: dati aggiornati, nessun nuovo messaggio
+    data = json.loads(BZ_JSON)
+    for x in data:
+        if x["messageId"][:-2] == "30575":
+            x["endDate"] = "2026-11-25"
+    pages[bolzano.FEED_URL] = json.dumps(data, ensure_ascii=False)
+    r = _poller(db, pages).run(date(2026, 11, 15))
+    assert r.new == {"bz": 0, "a22": 0} and db.pending_ordinanze() == []
+    assert db.get_ordinanza(ID_OFFSET["bz"] + 30575).end_date == "2026-11-25"
+

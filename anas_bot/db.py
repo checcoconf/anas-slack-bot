@@ -331,6 +331,12 @@ class Database:
             self.b.batch([("UPDATE ordinanze SET data = json_set(data, '$.end_date', ?, '$.open_ended', json('false')) "
                            "WHERE ord_id = ?", (end.isoformat(), i)) for i in ord_ids])
 
+    def refresh_ordinanze(self, items: list[Ordinanza]) -> None:
+        """Aggiorna i dati di avvisi già salvati (la fonte ha cambiato date o testo), senza toccarne lo stato."""
+        if items:
+            self.b.batch([("UPDATE ordinanze SET category=?, data=? WHERE ord_id=?",
+                           (o.category, json.dumps(o.to_dict(), ensure_ascii=False), o.ord_id)) for o in items])
+
     def get_ordinanza(self, ord_id: int) -> Ordinanza | None:
         rows = self.b.query("SELECT data FROM ordinanze WHERE ord_id=?", (ord_id,))
         return ordinanza_from_json(rows[0]["data"]) if rows else None

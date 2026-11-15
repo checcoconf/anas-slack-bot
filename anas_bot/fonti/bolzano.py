@@ -1,32 +1,31 @@
-"""Centrale Viabilità della Provincia di Bolzano: feed RSS ufficiale, in italiano.
+"""Centrale Viabilità della Provincia di Bolzano: solo le CHIUSURE stradali, dal JSON del bollettino.
 
-Feed: https://static-traffico.provincia.bz.it/publications/rss/tutte-le-categorie.xml (indirizzo valido dal
-novembre 2026; il vecchio endpoint SIAG resta attivo fino al 30/11/2026). Ogni voce ha:
-- <guid>: numero dell'avviso + 2 cifre di categoria (3071701 = "Situazione attuale", 3071712 = "Cantieri"):
-  la stessa notizia compare in più categorie, il numero di base (guid // 100) è uno solo;
-- <title>: la strada ("SS12 dell'Abetone e del Brennero", "LS/SP3 Val Senales", "Comune di Merano");
-- <description>: testo libero con km, orari e date; le chiusure vere sono in MAIUSCOLO ("è CHIUSA al
-  traffico", "CHIUSURA NOTTURNA", "CHIUSURA INVERNALE"), le "chiusure temporanee fino a 15 minuti" in
-  minuscolo e per Waze non sono chiusure;
-- <pubDate>: in pratica la data di INIZIO dell'avviso (ci sono date future), non di pubblicazione;
-- <category>: "Cantieri stradali / Chiusure", "Passi e vie di montagna", "Situazione attuale", "Percorsi
-  ciclabili", "Trasporti pubblici", "Fuori provincia".
+Fonte: https://static-verkehr.provinz.bz.it/publications/traffic/traffic.json, lo stesso file che carica la
+pagina https://traffico.provincia.bz.it (vista "Testo"). Rispetto al feed RSS ha le date di inizio e di FINE
+("fino al 11/12/2026" del sito) e il grado di ogni avviso. Ogni voce ha, tra l'altro:
+- messageId: numero dell'avviso + 2 cifre di categoria (3071701 = "Situazione attuale", 3071712 = "Cantieri"):
+  la stessa notizia compare in più categorie, il numero di base (messageId // 100) è uno solo;
+- messageGradId: 3 = "traffico bloccato" (chiusura), 4 = "rallentamenti", 5 = "percorribile liberamente";
+- messageTypeId: 1 situazione attuale, 8 passi, 10 trasporti pubblici, 11 fuori provincia, 12 cantieri e
+  chiusure, 13 percorsi ciclabili; messageZoneId 8 = "Fuori Alto Adige";
+- messageStreetNr + messageStreetInternetDescIt: la strada ("SS38" "Passo dello Stelvio", "LS/SP104" "Laudes",
+  "" "Comune di Merano"); placeIt: il testo in italiano; beginDate, endDate (vuota = non detta).
+
+Chiusura = grado 3 e testo in MAIUSCOLO (CHIUSA, CHIUSURA NOTTURNA, CHIUSURA INVERNALE). Tutto il resto
+(cantieri, sensi unici alternati, "chiusure temporanee fino a 10 minuti", divieti per categorie) si scarta: la
+Provincia è partner di Waze e quegli avvisi li inserisce già lei, mentre le chiusure dei segmenti le fanno gli
+editor (indicazione dello SM di zona, 14/11/2026). X/Y (coordinate WGS84) servono per il link a WME.
 """
 
 from __future__ import annotations
 
-import logging
 import re
-import xml.etree.ElementTree as ET
-from datetime import date
-from email.utils import parsedate_to_datetime
 
-from ..anas.parser import CLOSURE, OTHER, Ordinanza
+from ..anas.parser import CLOSURE, Ordinanza
 from . import ID_OFFSET
 
-log = logging.getLogger(__name__)
-
-FEED_URL = "https://static-traffico.provincia.bz.it/publications/rss/tutte-le-categorie.xml"
+FEED_URL = "https://static-verkehr.provinz.bz.it/publications/traffic/traffic.json"
+PAGE_URL = "https://traffico.provincia.bz.it/it/home#tab_text"  # si apre già sulla vista "Testo" (elenco avvisi)
 
 
 def is_updated_now(when) -> bool:
@@ -36,93 +35,68 @@ def is_updated_now(when) -> bool:
     leggono come i feriali (una richiesta in più, nessun danno)."""
     start = 8 if when.weekday() == 6 else 6
     return start <= when.hour <= 20
-PAGE_URL = "https://traffico.provincia.bz.it/it/"
 
-# categorie che non riguardano la mappa stradale (o non la provincia)
-SKIP_CATEGORIES = ("percorsi ciclabili", "trasporti pubblici", "fuori provincia", "controlli radar")
-SKIP_TITLES = ("ferrovia",)
 
-# chiusure vere: MAIUSCOLO (case-sensitive di proposito)
+BLOCKED = "3"                        # messageGradId: traffico bloccato
+SKIP_TYPES = {"10", "11", "13"}      # trasporti pubblici, fuori provincia, percorsi ciclabili
+SKIP_ZONES = {"8"}                   # fuori Alto Adige (es. SS42 Passo Mendola - Ronzone, in Trentino)
+SKIP_STREETS = ("ferrovia",)
+
+# chiusure vere: MAIUSCOLO nel testo (case-sensitive di proposito), oltre al grado "traffico bloccato"
 _CLOSED = re.compile(r"\bCHIUS[AOE]\b|\bCHIUSURA\b")
 # chiusura solo per alcune categorie di veicoli -> non è una chiusura per Waze
 _ONLY_SOME = re.compile(r"CHIUS\w*\s+(?:al traffico\s+)?(?:per|ai)\s+(?:autobus|autoarticolat|autotren|veicoli|mezzi pesanti|camion|biciclett|cicli)",
                         re.I)
-_NOTHING = re.compile(r"^\s*nessuna limitazione\.?\s*$", re.I)
-_ROAD = re.compile(r"^\s*(?:LS/)?(SS|SP|SC|SR|A)\s*(\d+\s*(?:bis|ter|dir|var)?)\b\s*(.*)$", re.I)
+_ROAD = re.compile(r"^\s*(?:LS/)?(SS|SP|SC|SR|A)\s*(\d+)\s*(bis|ter|dir|var)?\b\s*(.*)$", re.I)
 _KM = re.compile(r"km\s*(\d+)\s*[,.]\s*(\d{1,3})")
-_DATE = re.compile(r"\b(\d{1,2})\.(\d{1,2})\.(20\d\d)\b")
 _HOURS = re.compile(r"dalle ore\s*(\d{1,2})[:.](\d{2})\s*alle ore\s*(\d{1,2})[:.](\d{2})", re.I)
 _WINTER = re.compile(r"CHIUSURA INVERNALE")
+_ISO = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
 def _km(m: re.Match) -> str:
     return f"{int(m.group(1))}+{m.group(2).ljust(3, '0')}"
 
 
-def _road(title: str) -> tuple[list[str], dict[str, str]]:
-    """"SS12 dell'Abetone e del Brennero" -> (["SS12"], {"SS12": "dell'Abetone e del Brennero"});
-    "LS/SP3 Val Senales" -> (["SP3"], ...); "Comune di Merano" -> (["Comune di Merano"], {})."""
-    t = " ".join(title.split())
-    m = _ROAD.match(t)
+def _road(nr: str, name: str) -> tuple[list[str], dict[str, str]]:
+    """("SS38", "Passo dello Stelvio") -> (["SS38"], {"SS38": "Passo dello Stelvio"}); ("LS/SP 44", ...) ->
+    "SP44"; ("SS44Bis", ...) -> "SS44bis"; ("", "Comune di Merano") -> (["Comune di Merano"], {})."""
+    name = " ".join(name.split())
+    m = _ROAD.match(" ".join(nr.split()))
     if m:
-        code = (m.group(1).upper() + m.group(2).replace(" ", "")).upper()
-        name = m.group(3).strip()
+        code = m.group(1).upper() + m.group(2) + (m.group(3) or "").lower()
         return [code], ({code: name} if name else {})
-    return ([t] if t else []), {}
+    return ([name] if name else []), {}
 
 
-def _dates(text: str, start: date | None) -> tuple[str, str, bool]:
-    """(inizio, fine, _) dal testo: "fino a lunedì 16.11.2026", "da sabato 21.11.2026 ... a domenica
-    22.11.2026", "Da martedì 17.11.2026 - ore 00:00: ...". Fine vuota = non detta (l'avviso sparisce dal
-    bollettino quando finisce: lo chiude il poller)."""
-    found = []
-    for d, m, y in _DATE.findall(text):
-        try:
-            found.append(date(int(y), int(m), int(d)))
-        except ValueError:
-            continue
-    begin = start
-    end = None
-    if found:
-        low = text.lower()
-        if len(found) == 1 and not re.search(r"\bfino\b|\ba (?:lun|mar|mer|gio|ven|sab|dom)\w*\s+\d", low):
-            begin = found[0]  # "Da martedì 17.11.2026": è l'inizio, la fine non è detta
-        else:
-            if len(found) > 1:
-                begin = found[0]
-            end = found[-1]
-            if begin and end < begin:
-                end = None
-    return (begin.isoformat() if begin else ""), (end.isoformat() if end else ""), False
+def _day(v) -> str:
+    v = str(v or "").strip()[:10]
+    return v if _ISO.match(v) else ""
 
 
-def item_to_ordinanza(guid: str, title: str, description: str, category: str, pub_date: str) -> Ordinanza | None:
-    """Un avviso del feed -> Ordinanza, o None se non riguarda la mappa (ciclabili, treni, "nessuna limitazione")."""
-    cat = category.strip().lower()
-    title = " ".join(title.split())
-    text = " ".join(description.split())
-    if any(c in cat for c in SKIP_CATEGORIES) or title.lower().startswith(SKIP_TITLES):
+def item_to_ordinanza(item: dict) -> Ordinanza | None:
+    """Una voce del bollettino -> Ordinanza se è una chiusura stradale in Alto Adige, altrimenti None."""
+    s = lambda k: str(item.get(k) or "").strip()  # noqa: E731
+    street = " ".join(s("messageStreetInternetDescIt").split())
+    text = " ".join(s("placeIt").split())
+    if (s("messageTypeId") in SKIP_TYPES or s("messageZoneId") in SKIP_ZONES
+            or street.lower().startswith(SKIP_STREETS) or street.endswith(":")):  # riepiloghi ("… e passi:")
         return None
-    if not text or _NOTHING.match(text) or title.endswith(":"):  # riepiloghi generici ("Strade di montagna alte e passi:")
-        return None
+    if s("messageGradId") != BLOCKED or not _CLOSED.search(text) or _ONLY_SOME.search(text):
+        return None  # non è una chiusura: la Provincia lo inserisce già da sé in Waze
     try:
-        base_id = int(guid.strip()) // 100
+        base_id = int(s("messageId")) // 100
     except ValueError:
         return None
-    try:
-        start = parsedate_to_datetime(pub_date).date() if pub_date else None
-    except (TypeError, ValueError):
-        start = None
 
-    closed = bool(_CLOSED.search(text)) and not _ONLY_SOME.search(text)
-    roads, names = _road(title)
+    roads, names = _road(s("messageStreetNr"), street)
     kms = list(_KM.finditer(text))
-    begin, end, _ = _dates(text, start)
-    open_ended = bool(_WINTER.search(text)) and not end  # "fino a nuova disposizione" solo per i passi chiusi d'inverno
+    end = _day(item.get("endDate"))
+    winter = bool(_WINTER.search(text))
     hours = _HOURS.search(text)
-    o = Ordinanza(
+    return Ordinanza(
         ord_id=ID_OFFSET["bz"] + base_id,
-        category=CLOSURE if closed else OTHER,
+        category=CLOSURE,
         pdf_url=PAGE_URL,
         number="",
         structure="Provincia di Bolzano",
@@ -133,33 +107,24 @@ def item_to_ordinanza(guid: str, title: str, description: str, category: str, pu
         provinces=["BZ"],
         regions=["trentino-alto-adige"],
         province_inferred=True,
-        start_date=begin,
+        start_date=_day(item.get("beginDate")),
         end_date=end,
-        open_ended=open_ended,
+        open_ended=winter and not end,  # "fino a nuova disposizione" solo per le chiusure invernali dei passi
         time_window=(f"{int(hours.group(1)):02d}:{hours.group(2)}-{int(hours.group(3)):02d}:{hours.group(4)}"
-                     if hours and closed else ""),
-        excerpt=text,
+                     if hours else ""),
+        excerpt=("Chiusura invernale. " + text) if winter else text,
         source="bz",
-        listing_record={"guid": guid.strip(), "title": title, "category": category.strip(), "pubDate": pub_date},
+        listing_record={"messageId": s("messageId"), "type": s("messageTypeDescIt"),
+                        "x": item.get("X"), "y": item.get("Y")},
     )
-    if _WINTER.search(text):
-        o.excerpt = "Chiusura invernale. " + text
-    return o
 
 
-def parse_feed(xml_text: str) -> list[Ordinanza]:
-    """Tutti gli avvisi utili del feed, un'Ordinanza per notizia (i doppioni tra categorie si uniscono)."""
-    root = ET.fromstring(xml_text)
+def parse_traffic(data) -> list[Ordinanza]:
+    """Le chiusure del bollettino, una per notizia (i doppioni tra categorie si uniscono)."""
+    if not isinstance(data, list):
+        raise ValueError("Bolzano: risposta inattesa (non è un elenco di avvisi)")
     out: dict[int, Ordinanza] = {}
-    for item in root.iter("item"):
-        def val(tag: str) -> str:
-            el = item.find(tag)
-            return el.text or "" if el is not None else ""
-        o = item_to_ordinanza(val("guid"), val("title"), val("description"), val("category"), val("pubDate"))
-        if o is None:
-            continue
-        prev = out.get(o.ord_id)
-        # la stessa notizia in due categorie: vince la versione "chiusura" (di solito sono identiche)
-        if prev is None or (o.category == CLOSURE and prev.category != CLOSURE):
-            out[o.ord_id] = o
+    for item in data:
+        if isinstance(item, dict) and (o := item_to_ordinanza(item)) is not None:
+            out.setdefault(o.ord_id, o)
     return list(out.values())

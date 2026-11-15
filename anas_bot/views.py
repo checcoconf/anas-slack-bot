@@ -18,7 +18,8 @@ from __future__ import annotations
 
 from datetime import date
 
-from .fonti import SOURCE_LABELS, SOURCE_LINK_TEXT
+from .fonti import SOURCE_LABELS, SOURCE_LINK_TEXT, wme_url
+from .fonti import a22 as _a22, bolzano as _bolzano
 from .anas.parser import CLOSURE, OTHER, REOPENING, SPEED, Ordinanza
 from .db import User
 from .geo import MOTORWAYS, MOTORWAYS_LABEL, PROVINCE_BY_CODE, REGIONS, provinces_of_region
@@ -138,6 +139,8 @@ def preferences_modal(user: User | None) -> dict:
             {"type": "input", "block_id": B_KINDS, "label": _txt("🔔 Cosa vuoi ricevere"), "element": kinds_el},
             {"type": "context", "elements": [{"type": "mrkdwn", "text": BETA_NOTICE}]},
             {"type": "divider"},
+            {"type": "section", "text": {"type": "mrkdwn", "text": ALTO_ADIGE_NOTICE}},
+            {"type": "divider"},
             {"type": "section", "text": {"type": "mrkdwn", "text":
                 "*🚧 Zone per le altre ordinanze* (solo se le hai accese sopra)\n"
                 "Qui scegli dove ricevere cantieri e restringimenti, anche diverso da sopra: per esempio "
@@ -154,6 +157,15 @@ def preferences_modal(user: User | None) -> dict:
 
 # Avviso mostrato nel modulo, nella scheda Home e nel benvenuto: la classificazione è automatica.
 BETA_NOTICE = ('🧪 Il filtro "utili per Waze" è in beta: legge il riepilogo di ANAS con regole, non è perfetto. Può perdere qualche ordinanza o mandarne qualcuna che non c\'entra. Se noti un errore, segnalalo a checcoconf.')
+
+# Modulo: l'Alto Adige e l'A22 hanno fonti in più, con regole proprie
+ALTO_ADIGE_NOTICE = (
+    "*🏔️ Alto Adige e A22*\n"
+    "Per la provincia di Bolzano, oltre ad ANAS, ti mando *solo le chiusure stradali* della "
+    f"<{_bolzano.PAGE_URL}|Centrale Viabilità della Provincia di Bolzano>: cantieri e rallentamenti li "
+    "inserisce già la Provincia in Waze. Per l'autostrada del Brennero (Brennero–Modena) gli avvisi di "
+    f"<{_a22.PAGE_URL}|Autostrada del Brennero A22>. Ogni messaggio ha il link alla fonte e, per Bolzano, "
+    "📍 *Apri in WME* sul punto della chiusura.")
 
 # Firma dell'autore: in fondo alla scheda Home e al messaggio di benvenuto.
 CREDIT = ('🛠️ Creato da *Francesco Conforti* (checcoconf) per la community Waze Italia · '
@@ -269,6 +281,8 @@ def ordinanza_blocks(o: Ordinanza) -> list[dict]:
                                 "text": _txt(SOURCE_LINK_TEXT.get(o.source, "📄 Apri PDF")), "url": o.pdf_url}
     footer = (f"📡 Fonte: {SOURCE_LABELS[o.source]}" if o.source in SOURCE_LABELS and o.source
               else f"🏛️ Ordinanza {num}" + (f" · {o.structure}" if o.structure else ""))
+    if (wme := wme_url(o)):
+        footer += f" · <{wme}|📍 Apri in WME>"
     return [
         section,
         {"type": "context", "elements": [{"type": "mrkdwn", "text": footer}]},
@@ -305,7 +319,8 @@ def digest_messages(ords: list[Ordinanza], total: int, per_message: int = 15,
             title = f"📋 {total} {noun_one if total == 1 else noun_many}{what} in vigore nelle tue zone"
         if parts > 1:
             title += f" ({i // per_message + 1}/{parts})"
-        note = (f"Le {n} più recenti; le altre {total - n} su <{ORDINANZE_WEB_URL}|Ordinanze Web>."
+        where = f"<{ORDINANZE_WEB_URL}|Ordinanze Web>" + ("" if what else " (ANAS) o sul sito della fonte")
+        note = (f"Le {n} più recenti; le altre {total - n} su {where}."
                 if total > n else "Da qui in poi ti scrivo solo le novità.")
         blocks: list[dict] = [{"type": "header", "text": _txt(title)},
                               {"type": "context", "elements": [{"type": "mrkdwn", "text": note}]},

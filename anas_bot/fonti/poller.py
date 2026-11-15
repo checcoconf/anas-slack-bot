@@ -50,10 +50,12 @@ class FontiPoller:
         self.get = get or (lambda url: _http_get(url, user_agent))
 
     def _read(self, source: str):
+        # json.loads sui byte: la codifica (UTF-8) la riconosce da sé. Con .text, se il server non dichiara il
+        # charset, requests decodifica in latin-1 e le lettere accentate diventano "Ã " (14/11/2026).
         if source == "bz":
-            return bolzano.parse_feed(self.get(bolzano.FEED_URL).text)
+            return bolzano.parse_traffic(json.loads(self.get(bolzano.FEED_URL).content))
         if source == "a22":
-            return a22.parse_avvisi(json.loads(self.get(a22.API_URL).text))
+            return a22.parse_avvisi(json.loads(self.get(a22.API_URL).content))
         raise ValueError(f"fonte sconosciuta: {source}")
 
     def run(self, today: date, now=None) -> FontiResult:
@@ -94,6 +96,9 @@ class FontiPoller:
         new = [o for o in unseen if not o.is_expired(today)]
         for o in unseen:  # già scaduti: registrati in silenzio, così non si ripropongono a ogni giro
             self.db.save_ordinanza(o, o.excerpt, silent=first or o.is_expired(today))
+        # avvisi già visti ma cambiati alla fonte (fine spostata, orari, testo): si aggiornano senza riavvisare
+        stored = {o.ord_id: o for o in self.db.get_ordinanze(sorted(known))} if known else {}
+        self.db.refresh_ordinanze([o for o in items if o.ord_id in stored and o.to_dict() != stored[o.ord_id].to_dict()])
         # avvisi spariti dalla fonte: sono finiti (la fonte li toglie a lavori conclusi). Senza questo
         # resterebbero "in vigore" per sempre e finirebbero nel riepilogo dei nuovi iscritti.
         lo = ID_OFFSET[source]

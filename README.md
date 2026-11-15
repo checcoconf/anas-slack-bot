@@ -133,19 +133,22 @@ Scheda **Variables** (*New repository variable*):
 Oltre alle ordinanze ANAS, a ogni giro il bot legge due fonti pubbliche (due richieste in tutto, nessuna verso
 ANAS, quindi nessun effetto sul tetto delle 10 richieste l'ora). Codice in `anas_bot/fonti/`.
 
-- **Centrale Viabilità della Provincia di Bolzano**: feed RSS ufficiale in italiano
-  (`static-traffico.provincia.bz.it/publications/rss/tutte-le-categorie.xml`). Chiusure (scritte in maiuscolo
-  nel bollettino: CHIUSA, CHIUSURA NOTTURNA, CHIUSURA INVERNALE) come ⛔; sensi unici alternati, "chiusure
-  temporanee fino a 15 minuti", divieti per categorie come "altre ordinanze". Ciclabili, treni, bus e notizie
-  fuori provincia si scartano. Zona: provincia di Bolzano. Si legge solo quando il bollettino è aggiornato
-  (lun-sab 6-21, domenica 8-21).
+- **Centrale Viabilità della Provincia di Bolzano**: solo le **chiusure stradali** (⛔), dal JSON che usa la
+  pagina del bollettino (`static-verkehr.provinz.bz.it/publications/traffic/traffic.json`), con date di inizio
+  e di fine e coordinate. Chiusura = grado "traffico bloccato" e testo in maiuscolo (CHIUSA, CHIUSURA NOTTURNA,
+  CHIUSURA INVERNALE). Cantieri, sensi unici alternati, "chiusure temporanee fino a 10 minuti" non si mandano:
+  la Provincia è partner di Waze e quegli avvisi li inserisce già lei. Ciclabili, treni, bus e notizie fuori
+  Alto Adige si scartano. Ogni messaggio ha il pulsante per il bollettino (vista Testo) e il link
+  📍 *Apri in WME* sul punto della chiusura. Zona: provincia di Bolzano. Si legge solo quando il bollettino è
+  aggiornato (lun-sab 6-21, domenica 8-21).
 - **Autostrada del Brennero (A22)**: gli avvisi della pagina "Viabilità > Avvisi", letti dal JSON che la pagina
   usa (`/api/MapApi/GetAvvisi`). Scambio di carreggiata = chiusura della carreggiata (regola Waze); "deviazione
   di carreggiata con 2 flussi" = chiusura *da verificare*; svincoli/caselli chiusi = chiusura dell'accesso;
   GPL e colonnine SOS si scartano. Zona: provincia ricavata dai km, e "Autostrade" per chi le segue.
 
 Al primo giro tutto ciò che è già pubblicato viene registrato senza avvisare (come le ordinanze ANAS in vigore
-all'installazione); poi arrivano solo le novità. Un avviso che sparisce dalla fonte è concluso: non compare più
+all'installazione); poi arrivano solo le novità. Se la fonte cambia un avviso già visto (fine spostata, orari)
+il bot aggiorna i dati senza riavvisare. Un avviso che sparisce dalla fonte è concluso: non compare più
 nei riepiloghi. Se una fonte non risponde per 6 giri di fila l'admin riceve un avviso; ANAS continua comunque.
 Variabile `FONTI` (facoltativa): `bz,a22` (predefinito), `bz`, `a22`, oppure `no`.
 
