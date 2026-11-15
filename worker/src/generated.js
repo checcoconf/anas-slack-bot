@@ -1505,7 +1505,7 @@ export default {
     "type": "section",
     "text": {
      "type": "mrkdwn",
-     "text": "*🏔️ Alto Adige e A22*\nPer la provincia di Bolzano, oltre ad ANAS, ti mando *solo le chiusure stradali* della <https://traffico.provincia.bz.it/it/home#tab_text|Centrale Viabilità della Provincia di Bolzano>: cantieri e rallentamenti li inserisce già la Provincia in Waze. Per l'autostrada del Brennero (Brennero–Modena) gli avvisi di <https://www.autobrennero.it/it/viabilita/avvisi/|Autostrada del Brennero A22>. Ogni messaggio ha il link alla fonte e, per Bolzano, 📍 *Apri in WME* sul punto della chiusura."
+     "text": "*🏔️ Provincia di Bolzano e Autostrada del Brennero (A22)*\nPer la Provincia di Bolzano, oltre ad ANAS, ti mando *solo le chiusure stradali* della <https://traffico.provincia.bz.it/it/home#tab_text|Centrale Viabilità della Provincia di Bolzano>. Per l'A22 (Brennero–Modena) gli avvisi di <https://www.autobrennero.it/it/viabilita/avvisi/|Autostrada del Brennero A22>. Ogni messaggio ha il link alla fonte e, per la Provincia di Bolzano, 📍 *Apri in WME* sul punto della chiusura."
     }
    },
    {

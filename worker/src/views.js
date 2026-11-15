@@ -129,7 +129,7 @@ export function homeView(u) {
     });
   }
   blocks.push({ type: "actions", elements: buttons });
-  blocks.push({ type: "context", elements: [{ type: "mrkdwn", text: `📄 Fonti: ordinanze di ANAS S.p.A.; in Alto Adige anche le chiusure della Centrale Viabilità della Provincia di Bolzano e gli avvisi dell'Autostrada del Brennero (A22). Controlla sempre la fonte prima di modificare la mappa.\n${G.betaNotice}` }] });
+  blocks.push({ type: "context", elements: [{ type: "mrkdwn", text: `📄 Fonti: ordinanze di ANAS S.p.A.; per la Provincia di Bolzano anche le chiusure della Centrale Viabilità della Provincia di Bolzano; per l'A22 gli avvisi dell'Autostrada del Brennero. Controlla sempre la fonte prima di modificare la mappa.\n${G.betaNotice}` }] });
   blocks.push({ type: "context", elements: [{ type: "mrkdwn", text: G.credit }] });
   return { type: "home", blocks };
 }

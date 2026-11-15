@@ -158,13 +158,12 @@ def preferences_modal(user: User | None) -> dict:
 # Avviso mostrato nel modulo, nella scheda Home e nel benvenuto: la classificazione è automatica.
 BETA_NOTICE = ('🧪 Il filtro "utili per Waze" è in beta: legge il riepilogo di ANAS con regole, non è perfetto. Può perdere qualche ordinanza o mandarne qualcuna che non c\'entra. Se noti un errore, segnalalo a checcoconf.')
 
-# Modulo: l'Alto Adige e l'A22 hanno fonti in più, con regole proprie
+# Modulo: la Provincia di Bolzano e l'A22 hanno fonti in più, con regole proprie
 ALTO_ADIGE_NOTICE = (
-    "*🏔️ Alto Adige e A22*\n"
-    "Per la provincia di Bolzano, oltre ad ANAS, ti mando *solo le chiusure stradali* della "
-    f"<{_bolzano.PAGE_URL}|Centrale Viabilità della Provincia di Bolzano>: cantieri e rallentamenti li "
-    "inserisce già la Provincia in Waze. Per l'autostrada del Brennero (Brennero–Modena) gli avvisi di "
-    f"<{_a22.PAGE_URL}|Autostrada del Brennero A22>. Ogni messaggio ha il link alla fonte e, per Bolzano, "
+    "*🏔️ Provincia di Bolzano e Autostrada del Brennero (A22)*\n"
+    "Per la Provincia di Bolzano, oltre ad ANAS, ti mando *solo le chiusure stradali* della "
+    f"<{_bolzano.PAGE_URL}|Centrale Viabilità della Provincia di Bolzano>. Per l'A22 (Brennero–Modena) gli avvisi di "
+    f"<{_a22.PAGE_URL}|Autostrada del Brennero A22>. Ogni messaggio ha il link alla fonte e, per la Provincia di Bolzano, "
     "📍 *Apri in WME* sul punto della chiusura.")
 
 # Firma dell'autore: in fondo alla scheda Home e al messaggio di benvenuto.

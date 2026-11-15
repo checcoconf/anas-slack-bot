@@ -122,7 +122,7 @@ def test_messages_name_the_source_and_link_the_page():
 def test_the_zone_form_explains_alto_adige_sources():
     from anas_bot.views import preferences_modal
     text = json.dumps(preferences_modal(None), ensure_ascii=False)
-    assert "Alto Adige e A22" in text and bolzano.PAGE_URL in text and a22.PAGE_URL in text
+    assert "Provincia di Bolzano e Autostrada del Brennero (A22)" in text and bolzano.PAGE_URL in text and a22.PAGE_URL in text
 
 
 # --- giro ------------------------------------------------------------------------------------------------
