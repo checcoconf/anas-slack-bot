@@ -11,7 +11,7 @@ pagina https://traffico.provincia.bz.it (vista "Testo"). Rispetto al feed RSS ha
 - messageStreetNr + messageStreetInternetDescIt: la strada ("SS38" "Passo dello Stelvio", "LS/SP104" "Laudes",
   "" "Comune di Merano"); placeIt: il testo in italiano; beginDate, endDate (vuota = non detta).
 
-Chiusura = grado 3 e testo in MAIUSCOLO (CHIUSA, CHIUSURA NOTTURNA, CHIUSURA INVERNALE). Tutto il resto
+Chiusura = testo in MAIUSCOLO (CHIUSA, CHIUSI, CHIUSURA NOTTURNA, CHIUSURA INVERNALE), con grado 3 o 4. Tutto il resto
 (cantieri, sensi unici alternati, "chiusure temporanee fino a 10 minuti", divieti per categorie) si scarta: la
 Provincia è partner di Waze e quegli avvisi li inserisce già lei, mentre le chiusure dei segmenti le fanno gli
 editor (indicazione dello SM di zona, 14/11/2026). X/Y (coordinate WGS84) servono per il link a WME.
@@ -20,6 +20,7 @@ editor (indicazione dello SM di zona, 14/11/2026). X/Y (coordinate WGS84) servon
 from __future__ import annotations
 
 import re
+from datetime import date
 
 from ..anas.parser import CLOSURE, Ordinanza
 from . import ID_OFFSET
@@ -37,13 +38,13 @@ def is_updated_now(when) -> bool:
     return start <= when.hour <= 20
 
 
-BLOCKED = "3"                        # messageGradId: traffico bloccato
+FREE = "5"                           # messageGradId: percorribile liberamente (3 = bloccato, 4 = rallentamenti)
 SKIP_TYPES = {"10", "11", "13"}      # trasporti pubblici, fuori provincia, percorsi ciclabili
 SKIP_ZONES = {"8"}                   # fuori Alto Adige (es. SS42 Passo Mendola - Ronzone, in Trentino)
 SKIP_STREETS = ("ferrovia",)
 
-# chiusure vere: MAIUSCOLO nel testo (case-sensitive di proposito), oltre al grado "traffico bloccato"
-_CLOSED = re.compile(r"\bCHIUS[AOE]\b|\bCHIUSURA\b")
+# chiusure vere: MAIUSCOLO nel testo (case-sensitive di proposito)
+_CLOSED = re.compile(r"\bCHIUS[AOEI]\b|\bCHIUSUR[AE]\b|\bINTERROTT[AOEI]\b")  # "strada INTERROTTA" (frana) = chiusa
 # chiusura solo per alcune categorie di veicoli -> non è una chiusura per Waze
 _ONLY_SOME = re.compile(r"CHIUS\w*\s+(?:al traffico\s+)?(?:per|ai)\s+(?:autobus|autoarticolat|autotren|veicoli|mezzi pesanti|camion|biciclett|cicli)",
                         re.I)
@@ -52,6 +53,8 @@ _KM = re.compile(r"km\s*(\d+)\s*[,.]\s*(\d{1,3})")
 _HOURS = re.compile(r"dalle ore\s*(\d{1,2})[:.](\d{2})\s*alle ore\s*(\d{1,2})[:.](\d{2})", re.I)
 _WINTER = re.compile(r"CHIUSURA INVERNALE")
 _ISO = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+# "Da mercoledì 18.11.2026: ...", "CHIUSURA al traffico da sabato 21.11.2026 - ore 00:00 a ...": l'inizio vero
+_FROM = re.compile(r"\bda\s+(?:lun|mar|mer|gio|ven|sab|dom)\w*\s+(\d{1,2})\.(\d{1,2})\.(20\d\d)", re.I)
 
 
 def _km(m: re.Match) -> str:
@@ -74,24 +77,58 @@ def _day(v) -> str:
     return v if _ISO.match(v) else ""
 
 
+def _start(begin: str, end: str, text: str) -> str:
+    """Il bollettino pubblica l'avviso dal giorno prima: beginDate 17/11 per "Da mercoledì 18.11.2026: ...
+    CHIUSURA" (16/11/2026). Se il testo dice da quando, vale il testo (purché dentro beginDate-endDate)."""
+    m = _FROM.search(text)
+    if not m:
+        return begin
+    try:
+        said = date(int(m.group(3)), int(m.group(2)), int(m.group(1))).isoformat()
+    except ValueError:
+        return begin
+    return said if (not begin or said >= begin) and (not end or said <= end) else begin
+
+
+def _s(item: dict, key: str) -> str:
+    return " ".join(str(item.get(key) or "").split())
+
+
+def skip_reason(item: dict) -> str:
+    """Perché una voce del bollettino NON è una chiusura da mandare ("" = è da mandare)."""
+    street, text = _s(item, "messageStreetInternetDescIt"), _s(item, "placeIt")
+    if _s(item, "messageTypeId") in SKIP_TYPES:
+        return f"categoria \"{_s(item, 'messageTypeDescIt') or _s(item, 'messageTypeId')}\""
+    if _s(item, "messageZoneId") in SKIP_ZONES:
+        return "fuori Alto Adige"
+    if street.lower().startswith(SKIP_STREETS):
+        return "ferrovia"
+    if street.endswith(":"):
+        return "riepilogo generale (\"… e passi:\"): i singoli passi hanno un avviso proprio"
+    if _s(item, "messageGradId") == FREE:
+        return "percorribile liberamente"
+    # il grado non basta: "A Brunico CHIUSURA dopo un incidente" ha grado 4 (16/11/2026). Decide il MAIUSCOLO.
+    if not _CLOSED.search(text):
+        return "non è una chiusura (niente CHIUSA/CHIUSURA/INTERROTTA in maiuscolo): la Provincia lo inserisce già in Waze"
+    if _ONLY_SOME.search(text):
+        return "chiusa solo per alcuni veicoli"
+    if not _s(item, "messageId").isdigit():
+        return "numero dell'avviso mancante"
+    return ""
+
+
 def item_to_ordinanza(item: dict) -> Ordinanza | None:
     """Una voce del bollettino -> Ordinanza se è una chiusura stradale in Alto Adige, altrimenti None."""
-    s = lambda k: str(item.get(k) or "").strip()  # noqa: E731
-    street = " ".join(s("messageStreetInternetDescIt").split())
-    text = " ".join(s("placeIt").split())
-    if (s("messageTypeId") in SKIP_TYPES or s("messageZoneId") in SKIP_ZONES
-            or street.lower().startswith(SKIP_STREETS) or street.endswith(":")):  # riepiloghi ("… e passi:")
+    if skip_reason(item):
         return None
-    if s("messageGradId") != BLOCKED or not _CLOSED.search(text) or _ONLY_SOME.search(text):
-        return None  # non è una chiusura: la Provincia lo inserisce già da sé in Waze
-    try:
-        base_id = int(s("messageId")) // 100
-    except ValueError:
-        return None
+    s = lambda k: _s(item, k)  # noqa: E731
+    street, text = s("messageStreetInternetDescIt"), s("placeIt")
+    base_id = int(s("messageId")) // 100
 
     roads, names = _road(s("messageStreetNr"), street)
     kms = list(_KM.finditer(text))
     end = _day(item.get("endDate"))
+    start = _start(_day(item.get("beginDate")), end, text)
     winter = bool(_WINTER.search(text))
     hours = _HOURS.search(text)
     return Ordinanza(
@@ -107,7 +144,7 @@ def item_to_ordinanza(item: dict) -> Ordinanza | None:
         provinces=["BZ"],
         regions=["trentino-alto-adige"],
         province_inferred=True,
-        start_date=_day(item.get("beginDate")),
+        start_date=start,
         end_date=end,
         open_ended=winter and not end,  # "fino a nuova disposizione" solo per le chiusure invernali dei passi
         time_window=(f"{int(hours.group(1)):02d}:{hours.group(2)}-{int(hours.group(3)):02d}:{hours.group(4)}"

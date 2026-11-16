@@ -107,7 +107,8 @@ class FontiPoller:
             self.db.end_ordinanze(sorted(gone), today - timedelta(days=1))
             log.info("Fonte %s: %d avvisi conclusi (non più pubblicati)", SOURCE_LABELS[source], len(gone))
         if first:
-            self.db.set(seeded_key, "1")
+            if items:  # un primo elenco vuoto (fonte in panne?) non conta: il giro "in silenzio" resta da fare
+                self.db.set(seeded_key, "1")
             res.silent[source] = len(unseen)
         else:
             res.new[source] = len(new)

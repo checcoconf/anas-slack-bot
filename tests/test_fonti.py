@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from anas_bot.anas.parser import CLOSURE
+from anas_bot.anas.parser import CLOSURE, OTHER
 from anas_bot.db import Database
 from anas_bot.fonti import ID_OFFSET, a22, bolzano
 from anas_bot.fonti.poller import FAIL_ALERT_RUNS, FontiPoller
@@ -58,9 +58,36 @@ def test_bz_dates_roads_and_hours():
     assert got[29025].roads == ["SP104"] and got[29025].road_names == {"SP104": "Laudes"}
     naturno = got[30575]
     assert naturno.time_window == "19:00-06:00" and (naturno.start_date, naturno.end_date) == ("2026-11-17", "2026-11-18")
+    # il bollettino mette l'inizio il giorno prima; vale la data del testo
+    assert got[31559].start_date == "2026-11-17"    # beginDate 16/11, "Da martedì 17.11.2026 - ore 00:00"
+    assert (got[31611].start_date, got[31611].end_date) == ("2026-11-21", "2026-11-22")  # beginDate 20/11
+    assert got[29025].start_date == "2026-11-13"    # "da venerdì 13.11.2026": coincide con beginDate
     luson = got[31385]  # chiusa per maltempo, fine non detta: niente "fino a nuova disposizione"
     assert not luson.end_date and not luson.open_ended
     assert got[30351].excerpt.startswith("Per la manifestazione „Krampuslauf“")  # UTF-8 intatto
+
+
+def test_bz_start_date_from_the_text():
+    """16/11/2026, SP43 Passo Furcia: beginDate 17/11 ma "Da mercoledì 18.11.2026: ... CHIUSURA"."""
+    o = bolzano.item_to_ordinanza({
+        "messageId": "3170512", "beginDate": "2026-11-17", "endDate": "2026-11-20", "messageGradId": "3",
+        "messageTypeId": "12", "messageZoneId": "7", "messageStreetNr": "LS/SP43", "messageStreetInternetDescIt": "Passo Furcia",
+        "placeIt": "Da mercoledì 18.11.2026: Nei pressi del Passo Furcia (km 10,850 – km 11,150) CHIUSURA al traffico "
+                   "per la realizzazione di sottopassi stradali."})
+    assert (o.start_date, o.end_date) == ("2026-11-18", "2026-11-20") and o.roads == ["SP43"]
+
+
+def test_bz_closures_written_in_other_ways():
+    """16/11/2026: "vengono CHIUSI" (plurale maschile) e una chiusura per incidente con grado 4 ("rallentamenti")."""
+    base = {"beginDate": "2026-11-16", "endDate": "2026-11-29", "messageTypeId": "1", "messageZoneId": "4",
+            "messageStreetNr": "", "messageStreetInternetDescIt": "Comune di Bolzano"}
+    calcio = bolzano.item_to_ordinanza(base | {"messageId": "635901", "messageGradId": "3", "placeIt":
+        "Per la partita di calcio del F.C. Südtirol viale Trieste e via Trento vengono CHIUSI al traffico dalle ore 12:00"})
+    brunico = bolzano.item_to_ordinanza(base | {"messageId": "2779312", "messageGradId": "4", "messageStreetNr": "SS49",
+        "messageStreetInternetDescIt": "della Pusteria", "placeIt": "A Brunico (km 0,500 - km 1,000) CHIUSURA dopo un incidente"})
+    assert calcio.category == CLOSURE and brunico.category == CLOSURE
+    libero = bolzano.item_to_ordinanza(base | {"messageId": "685308", "messageGradId": "5", "placeIt": "Nessuna limitazione."})
+    assert libero is None
 
 
 def test_bz_unexpected_answer_is_an_error():
@@ -92,6 +119,34 @@ def test_a22_carriageway_swap_is_a_carriageway_closure():
 def test_a22_deviation_is_a_closure_to_verify():
     o = _a22()[622487]
     assert o.category == CLOSURE and o.uncertain and "deviazione" in o.uncertain_why
+
+
+def test_a22_deviation_with_traffic_left_on_the_carriageway_is_not_a_closure():
+    """16/11/2026: la carreggiata sud resta aperta con 2 corsie per chi non è deviato: per Waze non è una chiusura."""
+    o = a22.item_to_ordinanza({
+        "id": "632001", "codiceIcona": 54, "kM_Inizio": 8.817, "kM_Fine": 12.049, "direzione": "sud",
+        "titolo": "Dalle ore 08:00 del 11/11/2026 alle ore 14:00 del 20/11/2026\r\ndeviazione di carreggiata con "
+                  "2 corsie per il traffico non deviato\r\ndal km 8.817 al km 12.049 tra Brennero Paese e "
+                  "Vipiteno\r\ncarreggiata sud"})
+    assert o.category == OTHER and not o.ramp_only and not o.uncertain
+    assert (o.start_date, o.end_date) == ("2026-11-11", "2026-11-20") and o.provinces == ["BZ"]
+
+
+def test_a22_whole_service_area_closed_but_not_just_fuel():
+    """16/11/2026: "area di servizio chiusa" è una chiusura (icona 11 come il GPL); il solo carburante no."""
+    area = a22.item_to_ordinanza({"id": "628969", "codiceIcona": 11, "kM_Inizio": 187.2, "kM_Fine": 187.2,
+        "direzione": "sud", "titolo": "Dalle ore 22:00 del 16/11/2026 alle ore 18:00 del 19/11/2026 - area di servizio "
+                                       "chiusa\r\nper lavori di manutenzione\r\nin area di servizio Adige ovest\r\ncarreggiata sud"})
+    assert area.category == CLOSURE and area.access_kind == "area di servizio" and area.provinces == ["TN"]
+    assert "AREA DI SERVIZIO CHIUSA" in title_line(area)
+    fuel = a22.item_to_ordinanza({"id": "629495", "codiceIcona": 11, "kM_Inizio": 41.8, "kM_Fine": 41.8,
+        "direzione": "sud", "titolo": "Dalle ore 10:21 del 16/11/2026 - area di servizio, erogazione di carburante "
+                                       "chiusa\r\nper lavori in corso\r\nin area di servizio Plose ovest\r\ncarreggiata sud"})
+    assert fuel is None
+    svincolo = a22.item_to_ordinanza({"id": "628430", "codiceIcona": 7, "kM_Inizio": 131.4, "kM_Fine": 131.4,
+        "direzione": "sud", "titolo": "Dalle ore 20:00 del 16/11/2026 alle ore 06:00 del 17/11/2026\r\nchiusura svincolo "
+                                       "in entrata\r\ndella stazione autostradale di Trento Nord\r\ncarreggiata sud"})
+    assert svincolo.category == CLOSURE and svincolo.access_kind == "svincolo" and svincolo.provinces == ["TN"]
 
 
 def test_a22_provinces_by_km():

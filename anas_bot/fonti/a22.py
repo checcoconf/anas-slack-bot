@@ -13,7 +13,9 @@ Esempi reali (14/11/2026):
 
 Regole Waze: lo scambio di carreggiata svuota una carreggiata (il traffico passa a doppio senso sull'altra):
 è una chiusura di quella carreggiata. La "deviazione di carreggiata con 2 flussi di marcia" quasi sempre
-anche, ma la dicitura è meno netta: parte come chiusura "da verificare". Svincoli, uscite, entrate o caselli
+anche, ma la dicitura è meno netta: parte come chiusura "da verificare". Se invece resta traffico "non
+deviato" ("deviazione di carreggiata con 2 corsie per il traffico non deviato", 16/11/2026) la carreggiata
+resta percorribile: non è una chiusura, va tra le altre ordinanze. Svincoli, uscite, entrate o caselli
 "chiusi" sono chiusure di accessi.
 """
 
@@ -31,12 +33,18 @@ PAGE_URL = "https://www.autobrennero.it/it/viabilita/avvisi/"
 # Avvisi di servizio che non toccano la mappa: carburanti, colonnine SOS, ricarica
 SKIP_ICONS = {11, 21}
 _SKIP_TEXT = re.compile(r"\bGPL\b|metano|idrogeno|colonnin|non eroga|ricarica|carburant", re.I)
+_AREA_CLOSED = re.compile(r"area di servizio chius[ao]\b", re.I)  # "area di servizio chiusa", icona 11 (16/11/2026)
 _SWAP = re.compile(r"scambio di carreggiata", re.I)
 _DEVIATION = re.compile(r"deviazione di carreggiata", re.I)
+_NOT_DEVIATED = re.compile(r"\bnon deviat[oaie]\b", re.I)  # parte del traffico resta sulla sua carreggiata
 _ACCESS_CLOSED = re.compile(r"\b(svincolo|uscita|entrata|casello|stazione|area di servizio|rampa)\b[^.\n]{0,60}?\bchius[aoe]\b"
                             r"|\bchiusur[ae]\b[^.\n]{0,40}?\b(svincolo|uscita|entrata|casello|stazione|area di servizio|rampa)\b",
                             re.I)
-_ROAD_CLOSED = re.compile(r"\bchiusura (?:totale|della carreggiata|al traffico)\b|\bcarreggiata chiusa\b", re.I)
+_ROAD_CLOSED = re.compile(r"\bchiusura (?:totale|(?:della |di )?carreggiata|al traffico)\b|\bcarreggiata chiusa\b"
+                          r"|\bautostrada chiusa\b|\bchiusura (?:del)?l'autostrada\b", re.I)
+# chiusa solo una corsia ("chiusura corsia di sorpasso", "chiusura al traffico della corsia di emergenza",
+# "chiusura della corsia di accelerazione dello svincolo"): restringimento, per Waze non è una chiusura
+_LANE_ONLY = re.compile(r"\bchius\w*\s+(?:al traffico\s+)?(?:della\s+|delle\s+|di\s+|dell')?(?:\w+\s+)?corsi[ae]\b", re.I)
 _WHEN = re.compile(r"(?:dalle|alle) ore (\d{1,2}:\d{2}) del (\d{2})/(\d{2})/(\d{4})", re.I)
 
 # km della A22 -> provincia (confini approssimati ai caselli: Salorno ~km 125, Borghetto ~km 197,
@@ -65,31 +73,50 @@ def _km(v) -> str:
     return f"{int(x)}+{round((x - int(x)) * 1000):03d}"
 
 
-def item_to_ordinanza(item: dict) -> Ordinanza | None:
+def skip_reason(item: dict) -> str:
+    """Perché un avviso A22 non riguarda la mappa ("" = si tiene, come chiusura o tra le altre ordinanze)."""
+    if not str(item.get("id", "")).strip().isdigit():
+        return "numero dell'avviso mancante"
+    text = " ".join(str(item.get("titolo", "")).split())
+    if not text:
+        return "testo vuoto"
+    if _AREA_CLOSED.search(text):  # area chiusa del tutto (non solo il carburante): per Waze conta
+        return ""
     try:
-        aid = int(str(item.get("id", "")).strip())
-    except ValueError:
+        icon = int(item.get("codiceIcona") or 0)
+    except (TypeError, ValueError):
+        icon = 0
+    if icon in SKIP_ICONS or _SKIP_TEXT.search(text):
+        return "servizio (carburanti, colonnine SOS, ricarica)"
+    return ""
+
+
+def item_to_ordinanza(item: dict) -> Ordinanza | None:
+    if skip_reason(item):
         return None
+    aid = int(str(item["id"]).strip())
     text = " ".join(str(item.get("titolo", "")).split())
     try:
         icon = int(item.get("codiceIcona") or 0)
     except (TypeError, ValueError):
         icon = 0
-    if not text or icon in SKIP_ICONS or _SKIP_TEXT.search(text):
-        return None
 
     category, ramp_only, access, uncertain, why = OTHER, False, "", False, ""
-    if _SWAP.search(text):
+    if _LANE_ONLY.search(text):
+        pass  # resta "altro"
+    elif _SWAP.search(text):
         category, ramp_only, access = CLOSURE, True, "carreggiata"
-    elif _DEVIATION.search(text):
+    elif _DEVIATION.search(text) and not _NOT_DEVIATED.search(text):
         category, ramp_only, access = CLOSURE, True, "carreggiata"
         uncertain, why = True, "deviazione di carreggiata: di solito la carreggiata indicata è chiusa e il traffico passa sull'altra"
     elif (m := _ACCESS_CLOSED.search(text)):
         kind = (m.group(1) or m.group(2) or "").lower()
         category, ramp_only, access = CLOSURE, True, {"uscita": "svincolo", "entrata": "svincolo", "casello": "svincolo",
                                                       "stazione": "svincolo"}.get(kind, kind)
-    elif _ROAD_CLOSED.search(text):
+    elif (m := _ROAD_CLOSED.search(text)):
         category = CLOSURE
+        if "carreggiata" in m.group(0).lower():  # una sola carreggiata: "CARREGGIATA CHIUSA"
+            ramp_only, access = True, "carreggiata"
 
     times = _WHEN.findall(text)
     start = end = ""

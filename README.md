@@ -135,7 +135,7 @@ ANAS, quindi nessun effetto sul tetto delle 10 richieste l'ora). Codice in `anas
 
 - **Centrale Viabilità della Provincia di Bolzano**: solo le **chiusure stradali** (⛔), dal JSON che usa la
   pagina del bollettino (`static-verkehr.provinz.bz.it/publications/traffic/traffic.json`), con date di inizio
-  e di fine e coordinate. Chiusura = grado "traffico bloccato" e testo in maiuscolo (CHIUSA, CHIUSURA NOTTURNA,
+  e di fine e coordinate. Chiusura = testo in maiuscolo (CHIUSA, CHIUSI, CHIUSURA NOTTURNA,
   CHIUSURA INVERNALE). Cantieri, sensi unici alternati, "chiusure temporanee fino a 10 minuti" non si mandano:
   la Provincia è partner di Waze e quegli avvisi li inserisce già lei. Ciclabili, treni, bus e notizie fuori
   Alto Adige si scartano. Ogni messaggio ha il pulsante per il bollettino (vista Testo) e il link
