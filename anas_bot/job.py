@@ -138,9 +138,10 @@ def run(cfg: Config, db: Database, client, source, listing=None, started: float 
         flush()
         fetched, relevant = lres.new, lres.relevant
         log.info("Elenco ufficiale: %d richieste all'elenco (%d in tutto ad ANAS), %d ordinanze viste, %d nuove "
-                 "(%d utili, %d già in vigore prima del bot), %d corrette, %d rimandate, strutture: %s%s",
+                 "(%d utili, %d già in vigore prima del bot), %d corrette, %d rimandate, %d pagine in più per "
+                 "novità non in cima (%d non trovate), strutture: %s%s",
                  lres.requests, getattr(getattr(source, "client", None), "requests_made", 0), lres.seen, lres.new, lres.relevant,
-                 lres.silent, lres.upgraded, lres.deferred, ",".join(lres.structures) or "-",
+                 lres.silent, lres.upgraded, lres.deferred, lres.dug, lres.unfound, ",".join(lres.structures) or "-",
                  (f", saltate: {','.join(lres.skipped)}" if lres.skipped else "")
                  + (f", errore: {lres.error}" if lres.error else ""))
         _listing_alerts(db, client, cfg, lres)

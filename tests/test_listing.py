@@ -332,38 +332,56 @@ def test_firewall_block_stops_the_run_and_pauses_the_bot(env):
     assert not r.blocked and r.new == 1 and [o.ord_id for o in _useful(db)] == [212000]
 
 
-def test_pdf_cap_per_run_defers_the_rest_to_next_run(env):
-    """Poche richieste per giro: oltre il tetto dei PDF, le ordinanze che ne hanno bisogno slittano."""
+def test_pdf_cap_per_run_never_holds_a_closure_but_extensions_wait(env):
+    """Pochi PDF per giro. Una chiusura non aspetta mai il PDF: oltre il tetto parte con la regione della
+    struttura. Una proroga senza PDF non si capisce: oltre il tetto slitta al giro dopo."""
     cfg, db, listing, src = env
     cfg.max_pdf_per_run = 2
     p = ListingPoller(db, listing, src, cfg)
     _install(p, listing)
-    for i in range(4):  # 4 chiusure nuove: di notte ognuna vuole il PDF per le province
+    for i in range(4):  # 4 chiusure nuove: di notte ognuna vorrebbe il PDF per le province
         listing.pages["BA"].insert(0, _closure(212000 + i, "03/11/2026"))
     cfg.listing_deep_pages = 1
     r = p.run(date(2026, 11, 2), hour=3)
-    assert r.new == 2 and r.deferred == 2 and len(src.requests) == 2
-    r = p.run(date(2026, 11, 2), hour=3)
-    assert r.new == 2 and r.deferred == 0 and len(src.requests) == 4
+    assert r.new == 4 and r.relevant == 4 and r.deferred == 0 and len(src.requests) == 2
     assert sorted(o.ord_id for o in _useful(db)) == [212000, 212001, 212002, 212003]
+    proroga = BARI["results"][0]
+    for i in range(3):
+        listing.pages["BA"].insert(0, {**proroga, "ID": str(214100 + i), "NUMERO_ORDINANZA": f"{910 + i}/2026/BA"})
+        src.docs[214100 + i] = s.EXTENSION_BARI
+    r = p.run(date(2026, 11, 2), hour=4)
+    assert r.new == 2 and r.deferred == 1 and len(src.requests) == 4
+    r = p.run(date(2026, 11, 2), hour=5)
+    assert r.new == 1 and r.deferred == 0 and len(src.requests) == 5
 
 
-def test_by_day_closures_go_out_without_pdf_and_extensions_wait_for_the_night(env):
-    """Di giorno il budget va alle prime pagine: una chiusura nuova parte subito senza PDF (regione della
-    struttura, provincia non determinata); una proroga, che senza PDF non si capisce, aspetta la notte."""
+def test_by_day_extensions_and_closure_provinces_share_two_pdfs(env):
+    """Di giorno al massimo MAX_PDF_PER_RUN_DAY PDF per giro: una proroga (senza PDF non si capisce) non
+    aspetta più la notte; una chiusura parte comunque, con la provincia se il giro ha ancora un PDF."""
     cfg, db, listing, src = env
-    cfg.max_pdf_per_run_day = 1
+    cfg.max_pdf_per_run_day = 2
     p = ListingPoller(db, listing, src, cfg)
     _install(p, listing)
-    cfg.listing_deep_pages = 1
-    listing.pages["BA"].insert(0, _closure(213700, "03/11/2026"))
+    listing.pages["BA"].insert(0, _rec(213700, _riep("SS 7 APPIA", "su <strong>tutte le corsie</strong>,", ["chiusura al traffico"],
+                                                     "a partire dal <strong>03/11/2026</strong>"), numero="899/2026/BA"))
+    listing.pages["BA"].insert(0, _closure(213702, "03/11/2026", numero="901/2026/BA"))
     listing.pages["BA"].insert(0, {**BARI["results"][0], "ID": "213701", "NUMERO_ORDINANZA": "900/2026/BA"})  # proroga
-    r = p.run(date(2026, 11, 2), hour=14)
-    assert r.new == 1 and r.relevant == 1 and r.deferred == 1 and src.requests == [213700]   # 1 PDF di giorno: la provincia della chiusura
-    assert [o.ord_id for o in _useful(db)] == [213700]
     src.docs[213701] = s.EXTENSION_BARI
-    r = p.run(date(2026, 11, 3), hour=3)                      # notte: la proroga si legge dal PDF
-    assert r.deferred == 0 and src.requests == [213700, 213701]
+    src.docs[213702] = "ALLA PREFETTURA DI TARANTO\nORDINANZA\nchiusura"
+    r = p.run(date(2026, 11, 2), hour=14)
+    assert r.new == 3 and r.deferred == 0 and src.requests == [213701, 213702]   # proroga, poi una provincia
+    assert db.get_ordinanza(213701).extension and db.get_ordinanza(213702).provinces == ["TA"]
+    assert db.get_ordinanza(213700).provinces == [] and db.get_ordinanza(213700).regions == ["puglia"]
+    assert sorted(o.ord_id for o in _useful(db) if o.ord_id >= 213700) == [213700, 213701, 213702]
+    # senza PDF di giorno (MAX_PDF_PER_RUN_DAY=0) la proroga aspetta la notte, come prima
+    cfg.max_pdf_per_run_day = 0
+    listing.pages["BA"].insert(0, {**BARI["results"][0], "ID": "213703", "NUMERO_ORDINANZA": "902/2026/BA"})
+    src.docs[213703] = s.EXTENSION_BARI
+    r = p.run(date(2026, 11, 2), hour=15)
+    assert r.new == 0 and r.deferred == 1 and 213703 not in src.requests
+    cfg.listing_deep_pages = 1
+    r = p.run(date(2026, 11, 3), hour=3)
+    assert r.new == 1 and r.deferred == 0 and src.requests[-1] == 213703
 
 
 def test_many_new_ordinances_are_read_across_runs(env):
@@ -381,7 +399,7 @@ def test_many_new_ordinances_are_read_across_runs(env):
         found.append(r.new)
     assert found == [10, 4, 0]
     bari = [page for code, page in listing.calls if code == "BA"]
-    assert bari == [1, 2, 1, 2, 3, 4, 1]                 # 2 pagine, poi fino alla 4ª (carry), poi di nuovo 1
+    assert bari == [1, 2, 1, 2, 3, 1]                    # 2 pagine, poi una in più (carry), poi di nuovo 1
 
 
 def test_search_retries_once_with_fresh_session_after_http_500():
@@ -656,33 +674,31 @@ def test_hourly_ledger_waits_and_then_gives_up(tmp_path):
 
 
 
-def test_other_ordinance_without_province_waits_for_the_night_pdf_when_someone_follows_a_province(env):
-    """Chi segue le "altre ordinanze" per provincia (Taranto) non deve ricevere tutta la Puglia: di giorno
-    l'ordinanza senza provincia resta in sospeso, di notte si legge il PDF e si consegna solo se è di Taranto."""
+def test_other_ordinance_without_province_goes_out_at_once_to_province_followers(env):
+    """17/11/2026: 769, 772, 775/2026/BA senza provincia nel riepilogo non arrivavano a chi segue i lavori di Bari
+    e Taranto (aspettavano il PDF di notte, o erano già state lette). Ora partono subito con la regione:
+    chi segue una provincia della Puglia le riceve, come per le chiusure. Nessun PDF."""
+    from anas_bot.matching import matches
     cfg, db, listing, src = env
     p = ListingPoller(db, listing, src, cfg)
     _install(p, listing)
-    db.ensure_user("U_TA")
-    db.save_preferences("U_TA", all_italy=True, regions=[], provinces=[], want_closures=True, want_speed=True,
-                        want_all=True, all_provinces=["TA"])
-    cfg.listing_deep_pages = 1
-    works = _rec(213800, _riep("SS 7 APPIA", "su <strong>corsia di marcia</strong>,", ["restringimento carreggiata"],
-                               "a partire dal <strong>03/11/2026</strong> fino al <strong>30/11/2026</strong>"))
+    db.ensure_user("U_BA_TA")
+    db.save_preferences("U_BA_TA", all_italy=False, regions=["puglia"], provinces=[], want_closures=True,
+                        want_speed=True, want_all=True, all_provinces=["BA", "TA"])
+    db.ensure_user("U_MI")
+    db.save_preferences("U_MI", all_italy=False, regions=[], provinces=[], want_closures=True,
+                        want_speed=True, want_all=True, all_provinces=["MI"])
+    works = _rec(216272, _riep("SS 100 DI GIOIA DEL COLLE", "su <strong>tutte le corsie</strong>,",
+                               ["senso unico alternato mediante impianto semaforico o movieri", "restringimento carreggiata destra"],
+                               "a partire dal <strong>17/11/2026</strong> fino al <strong>18/12/2026</strong>"),
+                 numero="775/2026/BA")
     listing.pages["BA"].insert(0, works)
-    r = p.run(date(2026, 11, 3), hour=14)
-    assert r.new == 0 and r.deferred == 1 and src.requests == []          # giorno: in sospeso, nessun PDF
-    src.docs[213800] = "ALLA PREFETTURA DI TARANTO\nAL COMUNE DI GROTTAGLIE\nORDINANZA N. 900/2026/BA\nrestringimento carreggiata SS 7"
-    r = p.run(date(2026, 11, 4), hour=3)
-    assert r.new == 1 and r.deferred == 0 and src.requests == [213800]    # notte: PDF letto
-    o = db.get_ordinanza(213800)
-    assert o.provinces == ["TA"] and o.category == "altro"
-    # senza iscritti per provincia nelle "altre", niente PDF: si salva subito (la regione basta)
-    db.save_preferences("U_TA", all_italy=True, regions=[], provinces=[], want_closures=True, want_speed=True,
-                        want_all=True, all_regions=["puglia"])
-    listing.pages["BA"].insert(0, _rec(213801, works["RIEPILOGO"]))
-    r = p.run(date(2026, 11, 4), hour=14)
-    assert r.new == 1 and r.deferred == 0 and src.requests == [213800]
-
+    r = p.run(date(2026, 11, 17), hour=12)
+    assert r.new == 1 and r.deferred == 0 and src.requests == []
+    o = db.get_ordinanza(216272)
+    assert o.category == "altro" and o.provinces == [] and o.regions == ["puglia"]
+    assert matches(db.get_user("U_BA_TA"), o) and not matches(db.get_user("U_MI"), o)
+    assert 216272 in [x.ord_id for x in db.pending_ordinanze()]
 
 def test_type_b_reclassification_is_a_permanent_limit_not_a_closure():
     """Ordinanza reale 05/11/2026 (SS 719 Prato-Pistoia): "divieto di transito, limite 70 km/h ... interesserà
@@ -752,10 +768,9 @@ def test_daytime_pdf_is_at_most_one_per_run(env):
     for i in range(3):
         src.docs[214100 + i] = "ALLA PREFETTURA DI TARANTO\nORDINANZA\nchiusura"
     r = p.run(date(2026, 11, 3), hour=14)
-    assert r.relevant == 1 and r.deferred == 2 and len(src.requests) == 1       # tre chiusure, un PDF: le altre aspettano un giro
-    r = p.run(date(2026, 11, 3), hour=15)
-    assert r.relevant == 2 and r.deferred == 0 and len(src.requests) == 2       # un altro PDF; la terza parte con la regione
-    assert sum(1 for i in range(3) if db.get_ordinanza(214100 + i).provinces == ["TA"]) == 2
+    # tre chiusure, un PDF: la prima con la provincia, le altre partono SUBITO con la regione (17/11/2026: niente attese)
+    assert r.relevant == 3 and r.deferred == 0 and len(src.requests) == 1
+    assert sum(1 for i in range(3) if db.get_ordinanza(214100 + i).provinces == ["TA"]) == 1
 
 
 def test_atlas_is_seeded_once_from_the_archive(env):
@@ -869,3 +884,163 @@ def test_service_road_closure_is_not_a_main_road_closure():
     o = record_to_ordinanza(_rec(215400, riep, numero="758/2026/BA"), "Bari", "u")
     assert o.category == CLOSURE and o.ramp_only and o.access_kind == "complanare"
     assert "COMPLANARE CHIUSA" in title_line(o)
+
+
+# --- il totale della struttura dice se c'è qualcosa di nuovo più in basso ---------------------------------------
+
+def _new_works(id_, numero):
+    return _rec(id_, _riep("SS 172 DEI TRULLI", "su <strong>corsia di marcia</strong>,", ["restringimento carreggiata destra"],
+                           "a partire dal <strong>17/11/2026</strong> fino al <strong>18/12/2026</strong>"), numero=numero)
+
+
+def test_total_grown_without_news_on_top_makes_the_bot_dig_at_once(env):
+    """Il sito ordina per inizio di validità: un'ordinanza appena pubblicata può finire in 3ª pagina. Il totale
+    della struttura però sale: il bot se ne accorge e scende a cercarla nello stesso giro, di giorno."""
+    cfg, db, listing, src = env
+    p = ListingPoller(db, listing, src, cfg)
+    _install(p, listing)                                   # prime 2 pagine viste; totale BA 17
+    day = date(2026, 11, 17)
+    r = p.run(day, hour=9)
+    assert r.new == 0 and r.dug == 0 and listing.calls[-2:] == [("BA", 1), ("MI", 1)]
+    listing.calls.clear()
+    r = p.run(day, hour=10)                                # totale fermo: una pagina per struttura, niente di più
+    assert r.dug == 0 and listing.calls == [("BA", 1), ("MI", 1)]
+    listing.pages["BA"].insert(11, _new_works(216500, "780/2026/BA"))   # pubblicata ora, finisce in 3ª pagina
+    listing.calls.clear()
+    r = p.run(day, hour=11)
+    assert listing.calls == [("BA", 1), ("BA", 2), ("BA", 3), ("MI", 1)]
+    assert r.dug == 1 and r.unfound == 0 and db.get_ordinanza(216500) is not None   # la 3ª pagina è "in più"
+    pending = [o.ord_id for o in db.pending_ordinanze()]
+    assert 216500 in pending and not [i for i in pending if i < 1000]   # le vecchie mai viste prima restano mute
+    listing.calls.clear()
+    r = p.run(day, hour=12)                                # debito saldato: si torna a una pagina
+    assert r.dug == 0 and listing.calls == [("BA", 1), ("MI", 1)]
+
+
+def test_when_the_total_is_explained_by_the_first_page_nothing_else_is_read(env):
+    """Una novità in prima pagina e il totale salito di uno: è tutto lì, la seconda pagina non serve
+    (prima si leggeva sempre: una richiesta sprecata ogni volta che una struttura pubblicava)."""
+    cfg, db, listing, src = env
+    p = ListingPoller(db, listing, src, cfg)
+    _install(p, listing)
+    day = date(2026, 11, 17)
+    p.run(day, hour=9)
+    listing.pages["BA"].insert(0, _new_works(216501, "781/2026/BA"))
+    listing.calls.clear()
+    r = p.run(day, hour=10)
+    assert r.new == 1 and r.dug == 0 and listing.calls == [("BA", 1), ("MI", 1)]
+    # due novità, una in prima e una in seconda pagina: il totale lo dice, la seconda si legge
+    listing.pages["BA"].insert(0, _new_works(216511, "786/2026/BA"))
+    listing.pages["BA"].insert(7, _new_works(216512, "787/2026/BA"))
+    listing.calls.clear()
+    r = p.run(day, hour=11)
+    assert r.new == 2 and r.dug == 0 and listing.calls == [("BA", 1), ("BA", 2), ("MI", 1)]
+
+
+def test_digging_is_bounded_and_the_first_read_of_the_day_never_digs(env, monkeypatch):
+    import anas_bot.listing_poller as LP
+    cfg, db, listing, src = env
+    p = ListingPoller(db, listing, src, cfg)
+    _install(p, listing)
+    day = date(2026, 11, 17)
+    p.run(day, hour=9)
+    listing.pages["BA"].insert(16, _new_works(216502, "782/2026/BA"))   # in 4ª pagina
+    # un giro che ha finito le pagine "in più": il debito resta e si salda al giro dopo
+    monkeypatch.setattr(LP, "DIG_PAGES_PER_RUN", 1)
+    listing.calls.clear()
+    r = p.run(day, hour=10)
+    assert listing.calls == [("BA", 1), ("BA", 2), ("BA", 3), ("MI", 1)] and r.dug == 1 and r.unfound == 0
+    monkeypatch.setattr(LP, "DIG_PAGES_PER_RUN", 5)
+    listing.calls.clear()
+    r = p.run(day, hour=11)
+    assert listing.calls == [("BA", 1), ("BA", 2), ("BA", 3), ("BA", 4), ("MI", 1)] and db.get_ordinanza(216502)
+    # oltre DIG_PAGES pagine in più per lettura si rinuncia (resta la lettura profonda di notte), una volta sola
+    monkeypatch.setattr(LP, "DIG_PAGES", 1)
+    listing.pages["BA"].insert(17, _new_works(216503, "783/2026/BA"))
+    listing.calls.clear()
+    r = p.run(day, hour=12)
+    assert listing.calls == [("BA", 1), ("BA", 2), ("BA", 3), ("MI", 1)] and r.unfound == 1
+    assert db.get_ordinanza(216503) is None
+    listing.calls.clear()
+    r = p.run(day, hour=13)
+    assert listing.calls == [("BA", 1), ("MI", 1)] and r.dug == 0
+    # il giorno dopo il totale cambia comunque (escono le scadute): la prima lettura non confronta
+    listing.pages["BA"].insert(12, _new_works(216504, "784/2026/BA"))
+    listing.calls.clear()
+    r = p.run(date(2026, 11, 18), hour=9)
+    assert listing.calls == [("BA", 1), ("MI", 1)] and r.dug == 0
+
+
+def test_other_ordinance_gets_its_province_from_the_pdf_only_for_province_followers(env):
+    """ "Altre" senza provincia: il PDF si legge solo se qualcuno le segue per provincia in quella regione, e mai
+    con l'ultimo PDF del giro (che resta a proroghe e chiusure). In ogni caso l'ordinanza parte subito."""
+    cfg, db, listing, src = env
+    cfg.max_pdf_per_run_day = 2
+    p = ListingPoller(db, listing, src, cfg)
+    _install(p, listing)
+    day = date(2026, 11, 17)
+    listing.pages["BA"].insert(0, _new_works(216600, "790/2026/BA"))
+    src.docs[216600] = "ALLA PREFETTURA DI TARANTO\nORDINANZA N. 790/2026/BA\nrestringimento"
+    r = p.run(day, hour=9)
+    assert r.new == 1 and src.requests == [] and db.get_ordinanza(216600).provinces == []   # nessuno la segue per provincia
+    db.ensure_user("U_TA")
+    db.save_preferences("U_TA", all_italy=False, regions=[], provinces=[], want_closures=False, want_speed=False,
+                        want_all=True, all_provinces=["TA"])
+    for i, road in ((1, "SS 100 DI GIOIA DEL COLLE"), (2, "SS 7 APPIA")):
+        listing.pages["BA"].insert(0, _rec(216600 + i, _riep(road, "su <strong>corsia di marcia</strong>,", ["restringimento carreggiata destra"],
+                                                             "a partire dal <strong>17/11/2026</strong>"), numero=f"79{i}/2026/BA"))
+        src.docs[216600 + i] = "ALLA PREFETTURA DI TARANTO\nORDINANZA\nrestringimento"
+    r = p.run(day, hour=10)
+    assert r.new == 2 and r.deferred == 0 and src.requests == [216602]      # un PDF solo: l'ultimo del giro non si tocca
+    assert db.get_ordinanza(216602).provinces == ["TA"] and db.get_ordinanza(216601).provinces == []
+
+
+def test_bari_evening_of_17_november_all_seven_found_in_one_visit(env):
+    """Caso reale (Bari, 17/11/2026 sera): 7 ordinanze pubblicate insieme, 3 finite in prima pagina e 4 in
+    seconda, mescolate a quelle del mattino; due sono proroghe. Il totale sale di 7: il bot legge le due
+    pagine nella stessa visita e, con i 2 PDF del giro, anche le proroghe partono subito."""
+    cfg, db, listing, src = env
+    cfg.max_pdf_per_run_day = 2
+    p = ListingPoller(db, listing, src, cfg)
+    _install(p, listing)
+    day = date(2026, 11, 17)
+    morning = {n: _new_works(i, f"{n}/2026/BA") for n, i in ((774, 215243), (775, 216272), (773, 215574), (772, 215993), (769, 212987))}
+    listing.pages["BA"][:0] = [morning[n] for n in (774, 775, 769, 772, 773)]
+    r = p.run(day, hour=13)                                  # prima lettura del giorno: le 5 del mattino
+    assert r.new == 5
+    proroga = BARI["results"][0]
+    new = {n: _new_works(i, f"{n}/2026/BA") for n, i in ((784, 216800), (785, 216801), (777, 214145), (782, 216573), (779, 216631))}
+    for n, i in ((778, 216584), (780, 216907)):
+        new[n] = {**proroga, "ID": str(i), "NUMERO_ORDINANZA": f"{n}/2026/BA"}
+        src.docs[i] = s.EXTENSION_BARI
+    rest = listing.pages["BA"][5:]
+    listing.pages["BA"] = [new[784], new[785], morning[775], new[777], morning[774],
+                           new[782], new[779], new[778], new[780], morning[773],
+                           morning[772], morning[769]] + rest
+    listing.calls.clear()
+    r = p.run(day, hour=19)
+    assert listing.calls == [("BA", 1), ("BA", 2), ("MI", 1)]
+    assert r.new == 7 and r.deferred == 0 and r.dug == 0 and r.unfound == 0 and src.requests == [216584, 216907]
+    assert all(db.get_ordinanza(i) for i in (216800, 216801, 214145, 216573, 216631, 216584, 216907))
+
+
+def test_zones_saved_while_the_run_is_going_count_at_once(env):
+    """17/11/2026: zone dei lavori salvate alle 12:41, giro partito alle 12:38, la struttura letta alle 13:15.
+    Chi segue per provincia viene visto a ogni struttura: il PDF per la provincia si legge già in quel giro."""
+    cfg, db, listing, src = env
+    cfg.max_pdf_per_run_day = 3
+    p = ListingPoller(db, listing, src, cfg)
+    _install(p, listing)
+    listing.pages["MI"].insert(0, _rec(216700, _riep("SS 36 DEL LAGO DI COMO", "su <strong>corsia di marcia</strong>,",
+                                                     ["restringimento carreggiata destra"],
+                                                     "a partire dal <strong>17/11/2026</strong>"), numero="12/2026/MI"))
+    src.docs[216700] = "ALLA PREFETTURA DI MILANO\nALLA PREFETTURA DI LECCO\nORDINANZA N. 12/2026/MI\nrestringimento"
+
+    def save_zones():  # l'utente salva le zone a giro iniziato, dopo la prima struttura (Bari) e prima di Milano
+        db.ensure_user("U")
+        db.save_preferences("U", all_italy=False, regions=["lombardia"], provinces=[], want_closures=True,
+                            want_speed=True, want_all=True, all_provinces=["MI"])
+    p.after_structure = save_zones
+    r = p.run(date(2026, 11, 17), hour=13)
+    assert r.structures == ["BA", "MI"] and r.new == 1 and src.requests == [216700]
+    assert db.get_ordinanza(216700).provinces == ["LC", "MI"]

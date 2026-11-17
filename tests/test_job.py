@@ -235,7 +235,7 @@ def test_end_to_end_day_and_night_with_every_kind_of_subscriber(tmp_path, cfg):
     db = Database.local(str(tmp_path / "e2e.sqlite3"))
     assert migrate(db.b) == [] and migrate(db.b) == []                # schema già completo: niente da fare
     cfg.channel_ids, cfg.channel_subscriptions = [], "CAUTO=autostrade"
-    cfg.max_pdf_per_run_day = 2  # due chiusure nel giro di giorno: entrambe con il loro PDF per la provincia
+    cfg.max_pdf_per_run_day = 3  # di giorno: la proroga (PDF non ancora pubblicato) e le due chiusure, per la provincia
     slack = FakeSlack(members={})
     listing = FakeListing({"BA": [_closure(300, "20/10/2026")], "MI": [_closure(301, "20/10/2026", numero="5/2026/MI")]})
     src = FakeSource({})
@@ -269,7 +269,7 @@ def test_end_to_end_day_and_night_with_every_kind_of_subscriber(tmp_path, cfg):
         job.run(cfg, db, slack, src, listing, started=0.0)
     finally:
         J.datetime = real_now
-    assert src.requests == [400, 402]                                  # di giorno PDF solo per la provincia delle chiusure
+    assert src.requests == [403, 400, 402]                             # di giorno: la proroga e la provincia delle chiusure
     by = lambda ch: [p["text"] for p in slack.posts if p["channel"] == ch]  # noqa: E731
     it, pug, lom, auto = by("D-U_IT"), by("D-U_PUG"), by("D-U_LOM"), by("CAUTO")
     # riepiloghi iniziali (zone appena scelte) prima delle novità
@@ -297,7 +297,7 @@ def test_end_to_end_day_and_night_with_every_kind_of_subscriber(tmp_path, cfg):
         job.run(cfg, db, slack, src, listing, started=0.0)              # un altro giro: niente di nuovo
     finally:
         J.datetime = real_now
-    assert src.requests == [400, 402, 403]
+    assert src.requests == [403, 400, 402, 403]
     new_posts = slack.posts[n_before:]
     assert any(p["channel"] == "D-U_IT" and "SS172" in p["text"] for p in new_posts)   # la proroga, letta dal PDF
     assert not any(p["channel"] in ("D-U_LOM", "CAUTO") for p in new_posts)            # non è della loro zona

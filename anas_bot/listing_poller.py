@@ -13,10 +13,13 @@ in 90 minuti da un altro). Per questo ogni giro fa pochissime richieste, distanz
    quella struttura parte con una pagina in più. I messaggi Slack partono dopo ogni struttura.
    Di notte (LISTING_DEEP_HOURS) legge LISTING_DEEP_PAGES pagine per struttura, allo stesso ritmo:
    il sito ordina per inizio validità, e un'ordinanza nuova può stare in 2ª-4ª pagina.
-2. PDF: solo nelle ore della lettura profonda (di notte), al massimo MAX_PDF_PER_RUN per giro: proroghe,
-   revoche e province esatte delle chiusure. Di giorno il budget va tutto alle prime pagine, così il giro
-   d'Italia dura 2-3 ore: una chiusura nuova parte subito, con la regione della sua struttura (la
-   provincia, quando non è nel riepilogo, resta "non determinata"); proroghe e revoche aspettano la notte.
+   Il sito mette in cima le ordinanze di oggi ma in ordine sparso: una nuova può stare in 2ª-4ª pagina.
+   Ogni risposta dice quante ordinanze ha la struttura: dalla seconda lettura del giorno decide il totale.
+   Se è salito più delle novità viste, il bot scende subito a cercarle (DIG_PAGES); altrimenti si ferma.
+2. PDF: pochi per giro (di notte MAX_PDF_PER_RUN, di giorno MAX_PDF_PER_RUN_DAY). Servono a proroghe e
+   revoche, che senza PDF non si capiscono (se il giro ha finito i PDF aspettano la lettura dopo), e alla
+   provincia: di chiusure e limiti sempre, delle "altre" solo se qualcuno le segue per provincia in quella
+   regione. Nessuna ordinanza con il riepilogo aspetta la provincia: atlante -> PDF -> regione, e parte.
 3. BLOCCO: alla prima pagina di blocco del firewall il giro si ferma e il bot non fa richieste
    ad ANAS per BLOCK_PAUSE_MINUTES. Insistere durante la quarantena la allunga soltanto.
 4. BUDGET ORARIO: le richieste si contano per ora scorrevole, attraverso i giri (anas/budget.py):
@@ -62,8 +65,14 @@ log = logging.getLogger(__name__)
 
 _REF_NUMBER = re.compile(r"\b(\d{1,5})\s*/\s*(\d{4})\s*/\s*([A-Z]{2,3})\b")
 MAX_CARRY_PAGES = 6  # pagine in più che la lettura veloce può accumulare se arrivano molte novità
-MAX_PROVINCE_WAIT = 1
-# Ordinanze "in attesa" (proroghe che aspettano il PDF, "altre" che aspettano la provincia): ID -> giorno in cui
+# Il sito mette in cima le ordinanze pubblicate oggi, ma in ordine sparso (verificato il 17/11/2026 su Bari:
+# 9 del giorno su due pagine, quelle della sera mescolate a quelle del mattino): una nuova può stare in 2ª-4ª
+# pagina. Ogni risposta però dice quante ordinanze ha la struttura (tot_record): dalla seconda lettura del
+# giorno decide il totale. Se è salito più delle novità viste, il bot scende subito a cercarle; se le novità
+# viste lo spiegano tutto, non legge altre pagine (prima leggeva sempre la seconda: una richiesta sprecata).
+DIG_PAGES = 4          # pagine oltre le LISTING_FAST_PAGES_MAX, per struttura e per lettura
+DIG_PAGES_PER_RUN = 5  # ...e per giro in tutto: metà delle richieste di un'ora restano alle prime pagine
+# Ordinanze "in attesa" (proroghe e revoche che aspettano il PDF di notte): ID -> giorno in cui
 # il bot le ha viste la prima volta. Dalla seconda volta non contano più come "nuove", così non fanno leggere
 # pagine in più a ogni passaggio. Il 09/11/2026 queste attese avevano allungato il giro d'Italia da ~2,5 a
 # ~4,5 ore (Bari letta alle 19:00 e di nuovo alle 23:30): la 749/2026/BA è arrivata con 4 ore di ritardo.
@@ -86,6 +95,8 @@ class ListingResult:
     uncertain: dict[str, str] = field(default_factory=dict)  # chiusura da verificare: motivo -> link al PDF
     max_id: int = 0  # numero più alto visto: tiene vicino al presente il canale a numeri di riserva
     deferred: int = 0  # ordinanze rimandate al giro dopo perché il tetto dei PDF era esaurito
+    dug: int = 0  # pagine lette in più perché il totale della struttura era salito senza novità in cima
+    unfound: int = 0  # ordinanze che il totale dichiara ma non trovate nelle pagine lette (le cerca la notte)
     skipped: list[str] = field(default_factory=list)  # strutture saltate per un errore di rete
     error: str = ""
     broken: bool = False  # il formato dell'elenco è cambiato
@@ -101,27 +112,21 @@ class ListingPoller:
         self.source = source  # PdfSource: per proroghe/revoche e per trovare le province
         self.cfg = cfg
         self.pdf_budget = cfg.max_pdf_per_run  # PDF ancora scaricabili in questo giro
-        self.pdf_budget_day = cfg.max_pdf_per_run_day  # di giorno: solo chiusure/limiti senza provincia
+        self.pdf_budget_day = cfg.max_pdf_per_run_day  # di giorno: proroghe, revoche e province
+        self.dig_budget = DIG_PAGES_PER_RUN  # pagine "in più" ancora leggibili in questo giro
+        self._province_regions: set[str] = set()  # regioni dove qualcuno segue le "altre" per provincia
         self.atlante = Atlante(db.b)  # strada+km -> province, imparato dai PDF
-        self._province_regions: set[str] = set()  # calcolato a ogni giro (run)
         self.deep = False  # True nelle ore notturne (LISTING_DEEP_HOURS): più pagine, e i PDF
         self.after_structure = None  # callback senza argomenti: il job manda i messaggi in coda (giro lungo)
         self.watermark = 0  # ID più alto visto al primo giro: sotto è "già in vigore prima del bot"
 
-    def _fetch_text(self, ord_id: int) -> str | None:
-        """Testo del PDF, oppure None fuori dalle ore notturne o a tetto dei PDF esaurito (si riprova dopo)."""
-        if not self.deep or self.pdf_budget <= 0:
+    def _fetch_text(self, ord_id: int, keep: int = 0) -> str | None:
+        """Testo del PDF, oppure None se il giro ha finito i suoi PDF (di notte MAX_PDF_PER_RUN, di giorno
+        MAX_PDF_PER_RUN_DAY). keep: PDF da lasciare a chi non può farne a meno (proroghe e revoche)."""
+        attr = "pdf_budget" if self.deep else "pdf_budget_day"
+        if getattr(self, attr) <= keep:
             return None
-        self.pdf_budget -= 1
-        return self.source.fetch_text(ord_id)
-
-    def _fetch_text_day(self, ord_id: int) -> str | None:
-        """Di giorno, un PDF per giro al massimo: solo per la provincia di chiusure e limiti."""
-        self._day_pdf_tried = False
-        if self.pdf_budget_day <= 0:
-            return None
-        self.pdf_budget_day -= 1
-        self._day_pdf_tried = True  # provato davvero: se non dà la provincia, aspettare non serve
+        setattr(self, attr, getattr(self, attr) - 1)
         return self.source.fetch_text(ord_id)
 
     def _enrich_with_pdf_or_atlas(self, o: Ordinanza, text: str, fetch) -> str:
@@ -216,44 +221,16 @@ class ListingPoller:
                 return  # PDF non ancora pubblicato, o tetto dei PDF esaurito: riprova al giro dopo
         silent = bool(old) and not (o.start_date and o.start_date >= installed)
         if not silent:
-            if o.category in RELEVANT and not text and self.deep:  # di notte: le province dai destinatari del PDF
-                if self.pdf_budget <= 0 and not self.atlante.lookup(o.roads, o.km_from, o.km_to):
-                    res.deferred += 1
-                    return  # tetto dei PDF esaurito: la rimandiamo intera al giro dopo
-                text = self._enrich_with_pdf_or_atlas(o, text, self._fetch_text)
-            elif o.category in RELEVANT and not o.provinces and not text:
-                # di giorno: atlante -> un PDF per giro (poi impara). Se il PDF del giro è
-                # già speso e nessuno sa la provincia, l'ordinanza aspetta il giro dopo (PDF nuovo), al massimo
-                # MAX_PROVINCE_WAIT giri; poi parte con la sola regione, a tutti gli iscritti delle sue province
-                # (in una raffica di chiusure, meglio un'ora di attesa che la precisione: non di più).
-                self._day_pdf_tried = False
-                text = self._enrich_with_pdf_or_atlas(o, text, self._fetch_text_day)
-                if not o.provinces and not self._day_pdf_tried and o.roads and self.cfg.max_pdf_per_run_day > 0:
-                    key = f"province_wait_{ord_id}"
-                    waited = int(self.db.get(key, "0") or 0)
-                    if waited < MAX_PROVINCE_WAIT:
-                        self.db.set(key, str(waited + 1))
-                        res.deferred += 1
-                        return  # riprova al giro dopo con un PDF a disposizione
-                    log.info("Provincia di %s non trovata dopo %d giri: parte con la regione", o.number or ord_id, waited)
-            elif o.category not in RELEVANT and not o.provinces and not text \
-                    and set(o.regions) & self._province_regions:
-                # "altra" ordinanza senza provincia nel testo, in una regione dove qualcuno segue le "altre"
-                # per provincia: atlante -> PDF di notte; fino ad allora resta in sospeso
-                # (non si consegna "nel dubbio" a tutta la regione)
-                learned = self.atlante.lookup(o.roads, o.km_from, o.km_to)
-                if learned:
-                    o.provinces = learned
-                    o.regions = sorted({PROVINCE_BY_CODE[p].region for p in learned})
-                    o.province_inferred = True
-                else:
-                    if not self.deep or self.pdf_budget <= 0:
-                        res.deferred += 1
-                        return
-                    text = self._fetch_text(ord_id) or ""
-                    self._enrich_provinces(o, text)
-                    if o.provinces:
-                        self.atlante.learn(o.roads, o.km_from, o.km_to, o.provinces, o.ord_id)
+            # Provincia: atlante (gratis) -> PDF, se il giro ne ha ancora -> regione. Nessuna ordinanza aspetta
+            # la provincia (17/11/2026: aspettare il PDF le faceva arrivare tardi, o mai): se non si trova,
+            # parte subito con la regione e la riceve chi segue una qualunque provincia di quella regione.
+            if o.category in RELEVANT and not text and (self.deep or not o.provinces):
+                text = self._enrich_with_pdf_or_atlas(o, text, self._fetch_text)  # di notte il PDF si legge comunque
+            elif o.category not in RELEVANT and not o.provinces and not text:
+                # "altre": il PDF solo se qualcuno le segue per provincia in quella regione, e mai l'ultimo del giro
+                wanted = bool(set(o.regions) & self._province_regions)
+                text = self._enrich_with_pdf_or_atlas(
+                    o, text, (lambda i: self._fetch_text(i, keep=1)) if wanted else (lambda i: None))
             measures = [m for p in split_provisions(rec.get("RIEPILOGO", "")) for m in p.measures]
             for m in unknown_measures(measures):
                 res.unknown.setdefault(m, url)
@@ -326,16 +303,13 @@ class ListingPoller:
 
         self.pdf_budget = self.cfg.max_pdf_per_run
         self.pdf_budget_day = self.cfg.max_pdf_per_run_day
+        self.dig_budget = DIG_PAGES_PER_RUN
         self._today = today
         try:
             self._waiting = {str(k): str(v) for k, v in json.loads(self.db.get(WAITING_KEY, "{}") or "{}").items()}
         except (ValueError, AttributeError):
             self._waiting = {}
         waiting_before = dict(self._waiting)
-        # regioni in cui almeno un iscritto segue le "altre ordinanze" per singola provincia: lì la provincia
-        # delle "altre" va letta dal PDF (di notte), perché "nel dubbio a tutta la regione" non vale per loro
-        self._province_regions = {PROVINCE_BY_CODE[p].region for u in self.db.all_users() if u.receives and u.want_all
-                                  for p in u.all_provinces if p in PROVINCE_BY_CODE}
         try:
             self._fast_structures(today, installed, res, late)
         except BudgetExhausted as exc:
@@ -406,8 +380,18 @@ class ListingPoller:
             self.db.set("listing_fast_rr", str((off + done) % n))
             res.skipped = failed
 
+    def _grown(self, total_key: str, today: date, total: int) -> int | None:
+        """Di quante ordinanze è cresciuta la struttura dall'ultima lettura di OGGI; None se è la prima del
+        giorno (a mezzanotte il totale scende, perché escono le ordinanze scadute: il confronto non vale)."""
+        day, _, prev = (self.db.get(total_key) or "").partition(":")
+        return max(0, total - int(prev)) if day == today.isoformat() and prev.lstrip("-").isdigit() else None
+
     def _fast_structure(self, st: Structure, today: date, installed: str, res: ListingResult) -> None:
         self.watermark = int(self.db.get(f"listing_watermark_{st.code}", "0") or 0)
+        # riletto a ogni struttura, non a inizio giro: chi salva le zone a giro iniziato vale da subito
+        # (17/11/2026: zone salvate alle 12:41, giro partito alle 12:38, Bari letta alle 13:15)
+        self._province_regions = {PROVINCE_BY_CODE[p].region for u in self.db.all_users() if u.receives and u.want_all
+                                  for p in u.all_provinces if p in PROVINCE_BY_CODE}
         # prima lettura di questa struttura: presa visione (rifatta finché non vede davvero qualcosa)
         baseline = self.db.get(f"listing_done_{st.code}") is None
         carry_key = f"listing_fast_carry_{st.code}"
@@ -416,11 +400,15 @@ class ListingPoller:
         if self.deep:
             min_pages = max(min_pages, self.cfg.listing_deep_pages)
         max_pages = max(min_pages, self.cfg.listing_fast_pages_max + carry)
-        page, pages, new, max_id = 1, 1, 0, 0
+        total_key = f"listing_total_{st.code}"
+        page, pages, fresh, max_id, total = 1, 1, 0, 0, 0
+        missing = dug = 0  # ordinanze che il totale dichiara in più e non ancora viste; pagine lette per cercarle
+        informed = False   # il totale di oggi era già noto: è lui a dire se c'è altro più in basso
         seen0, new0 = res.seen, res.new
-        while page <= min(pages, max_pages):
+        while True:
             if page > 1 and getattr(self, "_late", lambda: False)():
-                break  # tempo del giro finito: la prima pagina si legge sempre, le altre al giro dopo (carry)
+                page -= 1
+                break  # tempo del giro finito: la prima pagina si legge sempre, le altre al giro dopo
             body = self.listing.search_page(st.area, today, page, causa=st.causa, causa_dett=st.causa_dett)
             res.requests += 1
             pages = int(body.get("tot_pagine") or 0)
@@ -428,16 +416,50 @@ class ListingPoller:
             if page == 1 and not results and int(body.get("tot_record") or 0) > 0:
                 raise ListingError(f"la ricerca {st.code} dichiara {body.get('tot_record')} ordinanze ma non le "
                                    f"elenca: {body.get('messaggio') or 'formato cambiato'}")
+            if page == 1:
+                total = int(body.get("tot_record") or 0)
+                grown = None if baseline else self._grown(total_key, today, total)
+                missing, informed = grown or 0, grown is not None
             ids = [int(r["ID"]) for r in results if str(r.get("ID", "")).isdigit()]
             max_id = max([max_id, *ids])
+            silent0 = res.silent
             new = self._handle_page(results, st, baseline, installed, res)
-            if not baseline and page >= min_pages and new == 0:
+            # novità vere: non contano le ordinanze vecchie mai viste prima (già in vigore prima del bot), che
+            # si incontrano scendendo in pagine mai lette e vengono solo segnate come viste
+            fresh = new - (res.silent - silent0)
+            missing -= fresh
+            # il debito resta scritto finché non è saldato: se il giro si interrompe, la prossima lettura riprende
+            self.db.set(total_key, f"{today.isoformat()}:{total - max(0, missing)}")
+            if page >= pages:
                 break
+            if page < min_pages or (baseline and page < max_pages):
+                pass  # pagine minime (di notte LISTING_DEEP_PAGES); alla presa visione tutte le pagine massime
+            elif informed:
+                # decide il totale: si scende solo se dichiara ordinanze non ancora viste (17/11/2026: a Bari 7
+                # nuove in un'ora, 3 in prima pagina e 4 in seconda, mescolate a quelle del mattino)
+                if missing <= 0:
+                    break
+                if page >= max_pages:
+                    if dug >= DIG_PAGES or self.dig_budget <= 0:
+                        break
+                    dug += 1
+                    self.dig_budget -= 1
+            elif fresh <= 0 or page >= max_pages:
+                break  # prima lettura del giorno, senza totale: si prosegue finché le pagine portano novità
             page += 1
         seen, found = res.seen - seen0, res.new - new0
-        still_new = not baseline and page > max_pages and new > 0 and page <= pages
-        log.info("Elenco %s: %d pagine, %d ordinanze viste, %d nuove%s (richieste ad ANAS finora: %d)",
-                 st.code, page - 1 if page > max_pages or page > pages else page, seen, found,
+        res.dug += dug
+        if missing > 0 and (dug >= DIG_PAGES or page >= pages):
+            # cercate fin dove si può in una lettura: si rinuncia (resta la lettura profonda di notte)
+            res.unfound += missing
+            self.db.set(total_key, f"{today.isoformat()}:{total}")
+            log.warning("Elenco %s: il sito dichiara %d ordinanze in più, non trovate nelle prime %d pagine",
+                        st.code, missing, page)
+        # senza il totale di oggi (prima lettura del giorno) vale la regola di sempre: se l'ultima pagina letta
+        # portava ancora novità, al giro dopo si parte con una pagina in più
+        still_new = not baseline and not informed and fresh > 0 and max_pages <= page < pages
+        log.info("Elenco %s: %d pagine%s, %d ordinanze viste, %d nuove%s (richieste ad ANAS finora: %d)",
+                 st.code, page, f" (di cui {dug} in più: il totale era salito)" if dug else "", seen, found,
                  " (presa visione)" if baseline else "",
                  getattr(getattr(self.listing, "anas", None), "requests_made", 0))
         self.db.set(carry_key, str(max_pages if still_new else 0))

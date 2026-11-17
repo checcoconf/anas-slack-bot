@@ -73,8 +73,10 @@ class Config:
     # Un blocco costa un'ora di silenzio (12 richieste perse): meglio 2 richieste in meno che un blocco.
     max_requests_per_hour: int = 10  # tetto per ora scorrevole, contato attraverso i giri (anas/budget.py)
     max_pdf_per_run: int = 3  # PDF scaricati al massimo per giro di notte (gli altri slittano al giro dopo)
-    # Di giorno: PDF solo per chiusure e limiti senza provincia (1 richiesta su 10, poi l'atlante la impara)
-    max_pdf_per_run_day: int = 1
+    # Di giorno, al massimo 3 richieste su 10 e solo quando servono: proroghe e revoche (senza PDF non si
+    # capiscono: prima aspettavano la notte), la provincia di chiusure e limiti e quella delle "altre" seguite
+    # per provincia (mai con l'ultimo PDF del giro). In media sono pochi: l'atlante impara e i PDF calano.
+    max_pdf_per_run_day: int = 3
     block_pause_minutes: int = 60  # dopo una pagina di blocco del firewall: niente richieste per un'ora
     max_requests_per_cycle: int = 4  # canale a numeri (di riserva): PDF provati per giro, pochi per il firewall
     max_gap: int = 25

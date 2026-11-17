@@ -307,7 +307,8 @@ def test_cantieri_can_have_their_own_zones(db, cfg):
     works_ta = Ordinanza(ord_id=3, category=OTHER, regions=["puglia"], provinces=["TA"])
     works_puglia_no_prov = Ordinanza(ord_id=4, category=OTHER, regions=["puglia"], provinces=[])
     assert matches(u, closure_ct) and not matches(u, works_ct)
-    assert matches(u, works_ta) and not matches(u, works_puglia_no_prov)  # provincia ignota: NON "nel dubbio"
+    assert matches(u, works_ta) and matches(u, works_puglia_no_prov)  # provincia ignota: arriva "nel dubbio"
+    assert not matches(u, Ordinanza(ord_id=5, category=OTHER, regions=["sicilia"], provinces=[]))
     # zone dei cantieri vuote = le stesse delle chiusure (qui tutta Italia)
     _subscribe(db, "V", all_italy=True, want_all=True)
     assert matches(db.get_user("V"), works_ct)
